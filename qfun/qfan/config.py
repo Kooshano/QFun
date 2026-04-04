@@ -20,6 +20,5 @@ class QFANConfig:
 class BenchmarkConfig:
     samples_per_equation: int = 512
     test_split: float = 0.2
-    shots: int = 2000
     quick_mode: bool = False
     quick_limit: int = 5

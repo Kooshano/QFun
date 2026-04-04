@@ -15,18 +15,12 @@ htmlcov/
 
 # Generated outputs
 artifacts/
-*.png
+artifacts/**/*.png
 output.png
+
+# Ad-hoc notebook extraction artifacts
+_nb_src.txt
+_nb_cells.txt
 
 # Notebook noise
 notebooks/.ipynb_checkpoints/
-archive/notebooks/.ipynb_checkpoints/
-
-# Paper build products
-paper/*.aux
-paper/*.bbl
-paper/*.blg
-paper/*.log
-paper/*.out
-paper/*.pdf
-paper/figures/

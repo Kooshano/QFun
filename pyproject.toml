@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qfun"
+version = "0.1.0"
+description = "QFun – Quantum Function Approximation Network"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "pennylane>=0.35",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "jupyter", "ruff>=0.3"]
+
+[tool.setuptools.packages.find]
+include = ["qfun*", "scripts*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

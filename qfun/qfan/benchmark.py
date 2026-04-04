@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from qfun import feynman_dataset
+from .. import feynman_dataset
 
 from .config import BenchmarkConfig, QFANConfig
 from .feynman import sample_equation

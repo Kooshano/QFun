@@ -24,4 +24,13 @@ from .plot import plot_comparison, plot_signed_comparison, plot_comparison_2d
 from . import feynman_dataset
 
 from . import qfan
-from .qfan import QFANBlock, QKANBlock, QFANConfig, BenchmarkConfig, train_qfan, run_feynman_benchmark
+from .qfan import (
+    QFANBlock,
+    QKANBlock,
+    QFANConfig,
+    BenchmarkConfig,
+    FeynmanQFANResult,
+    train_qfan,
+    train_feynman_equation,
+    run_feynman_benchmark,
+)
