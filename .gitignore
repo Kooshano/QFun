@@ -12,3 +12,21 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Generated outputs
+artifacts/
+*.png
+output.png
+
+# Notebook noise
+notebooks/.ipynb_checkpoints/
+archive/notebooks/.ipynb_checkpoints/
+
+# Paper build products
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/figures/
