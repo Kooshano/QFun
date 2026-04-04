@@ -1,0 +1,51 @@
+\begin{thebibliography}{6}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Bartlett(1945)]{bartlett1945negative}
+M.~S. Bartlett.
+\newblock Negative probability.
+\newblock \emph{Mathematical Proceedings of the Cambridge Philosophical
+  Society}, 41\penalty0 (1):\penalty0 71--73, 1945.
+\newblock \doi{10.1017/S0305004100022398}.
+
+\bibitem[Bergholm et~al.(2020)Bergholm, Izaac, Schuld, Gogolin, Blank,
+  McKiernan, and Killoran]{bergholm2020pennylane}
+Ville Bergholm, Josh Izaac, Maria Schuld, Christian Gogolin, Carsten Blank,
+  Keri McKiernan, and Nathan Killoran.
+\newblock Pennylane: Automatic differentiation of hybrid quantum-classical
+  computations.
+\newblock \emph{Quantum}, 4:\penalty0 373, 2020.
+\newblock \doi{10.22331/q-2020-11-16-373}.
+\newblock arXiv:1811.04968.
+
+\bibitem[Harrow et~al.(2009)Harrow, Hassidim, and Lloyd]{harrow2009hhl}
+Aram~W. Harrow, Avinatan Hassidim, and Seth Lloyd.
+\newblock Quantum algorithm for linear systems of equations.
+\newblock \emph{Physical Review Letters}, 103\penalty0 (15):\penalty0 150502,
+  2009.
+\newblock \doi{10.1103/PhysRevLett.103.150502}.
+
+\bibitem[Liu et~al.(2024)Liu, Wang, Vaidya, Ruehle, Halverson,
+  Solja{\v{c}}i{\'c}, Hou, and Tegmark]{liu2024kan}
+Ziming Liu, Yixuan Wang, Sachin Vaidya, Fabian Ruehle, James Halverson, Marin
+  Solja{\v{c}}i{\'c}, Tingyu Hou, and Max Tegmark.
+\newblock Kan: Kolmogorov--arnold networks.
+\newblock \emph{arXiv preprint}, 2024.
+
+\bibitem[Polson and Sokolov(2024)]{polson2024negative}
+Nicholas~G. Polson and Vadim Sokolov.
+\newblock Negative probability.
+\newblock \emph{arXiv preprint}, 2024.
+
+\bibitem[Udrescu and Tegmark(2020)]{udrescu2020aifeynman}
+Silviu-Marian Udrescu and Max Tegmark.
+\newblock Ai feynman: A physics-inspired method for symbolic regression.
+\newblock \emph{Science Advances}, 6\penalty0 (16):\penalty0 eaay2631, 2020.
+\newblock \doi{10.1126/sciadv.aay2631}.
+\newblock Preprint: arXiv:1905.11481.
+
+\end{thebibliography}
