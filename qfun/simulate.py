@@ -13,23 +13,16 @@ from typing import NamedTuple
 import numpy as np
 import pennylane as qml
 
-
-# ── helpers ────────────────────────────────────────────────────────────────
-
-def _samples_to_counts(samples: np.ndarray) -> dict[str, int]:
-    if samples.ndim == 1:
-        samples = samples.reshape(1, -1)
-    counts: dict[str, int] = {}
-    for row in samples:
-        key = "".join(str(int(b)) for b in row)
-        counts[key] = counts.get(key, 0) + 1
-    return counts
-
+from ._utils import _samples_to_counts
 
 # ── standard (nonneg) API ──────────────────────────────────────────────────
 
 def build_circuit(amplitudes: np.ndarray, n_qubits: int) -> qml.QNode:
-    """Return a QNode that prepares *amplitudes* and measures in the computational basis."""
+    """Return a QNode that prepares *amplitudes* and measures in the computational basis.
+
+    For most use cases prefer :func:`run_shots`, which runs the same preparation with
+    configurable shot counts. This helper is kept for advanced / custom workflows.
+    """
     dev = qml.device("default.qubit", wires=n_qubits, shots=1)
 
     @qml.qnode(dev, interface="auto")
@@ -213,3 +206,16 @@ def estimate_expectation_signed(
         z_plus * np.dot(g_values, p_plus_hat)
         - z_minus * np.dot(g_values, p_minus_hat)
     )
+
+
+__all__ = [
+    "SignedDistribution",
+    "TwoChannelResult",
+    "build_circuit",
+    "counts_to_distribution",
+    "counts_to_signed_distribution",
+    "estimate_expectation_signed",
+    "run_shots",
+    "run_shots_signed",
+    "run_two_channel_signed",
+]

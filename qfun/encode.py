@@ -7,7 +7,8 @@ Includes multivariate (n-d) grid construction for multi-qubit encoding.
 
 from __future__ import annotations
 
-from typing import Callable, NamedTuple, Union
+from collections.abc import Callable
+from typing import NamedTuple
 
 import numpy as np
 
@@ -135,7 +136,7 @@ class NDGrid(NamedTuple):
 
 def grid_nd(
     domains: dict[str, tuple[float, float]],
-    n_qubits_per_var: Union[dict[str, int], int],
+    n_qubits_per_var: int | dict[str, int],
 ) -> NDGrid:
     """Build a multi-dimensional sample grid for multivariate encoding.
 
@@ -198,3 +199,16 @@ def amplitudes_from_function_nd(
     if norm < eps:
         raise ValueError("f is zero everywhere on the grid — cannot normalize.")
     return raw / norm
+
+
+__all__ = [
+    "NDGrid",
+    "SignedAmplitudes",
+    "SignedDecomposition",
+    "amplitudes_from_function",
+    "amplitudes_from_function_nd",
+    "decompose_signed_distribution",
+    "grid_nd",
+    "grid_x",
+    "signed_amplitudes_from_function",
+]

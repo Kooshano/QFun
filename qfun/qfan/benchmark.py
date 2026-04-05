@@ -9,7 +9,6 @@ from pathlib import Path
 import numpy as np
 
 from .. import feynman_dataset
-
 from .config import BenchmarkConfig, QFANConfig
 from .feynman import sample_equation
 from .training import train_qfan

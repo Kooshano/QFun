@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 if TYPE_CHECKING:
     from .encode import NDGrid
@@ -76,7 +76,7 @@ def plot_signed_comparison(
 # ---------------------------------------------------------------------------
 
 def plot_comparison_2d(
-    grid: "NDGrid",
+    grid: NDGrid,
     target_prob: np.ndarray,
     empirical_prob: np.ndarray,
     *,
@@ -140,3 +140,10 @@ def plot_comparison_2d(
         print(f"Figure saved to {save_path}")
     else:
         plt.show()
+
+
+__all__ = [
+    "plot_comparison",
+    "plot_comparison_2d",
+    "plot_signed_comparison",
+]

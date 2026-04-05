@@ -10,7 +10,8 @@ physical constants) so it can be directly used with QFun's amplitude encoding.
 
 from __future__ import annotations
 
-from typing import Callable, NamedTuple
+from collections.abc import Callable
+from typing import NamedTuple
 
 import numpy as np
 
@@ -346,3 +347,11 @@ def get_equation(eq_id: str) -> FeynmanEquation:
             f"Unknown equation '{eq_id}'. "
             f"Available: {sorted(_INDEX.keys())}"
         ) from None
+
+
+__all__ = [
+    "EQUATIONS",
+    "FeynmanEquation",
+    "get_equation",
+    "list_equations",
+]

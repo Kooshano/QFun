@@ -1,36 +1,102 @@
+"""QFun: quantum-inspired function encoding, simulation, and QFAN."""
+
+from __future__ import annotations
+
+import warnings
+
+from . import datasets, feynman_dataset, qfan
+from .datasets import (
+    ClassificationDataset,
+    PreparedClassificationSplit,
+    load_classification_dataset,
+    prepare_classification_split,
+)
 from .encode import (
-    grid_x,
-    amplitudes_from_function,
-    signed_amplitudes_from_function,
-    decompose_signed_distribution,
+    NDGrid,
     SignedAmplitudes,
     SignedDecomposition,
-    grid_nd,
+    amplitudes_from_function,
     amplitudes_from_function_nd,
-    NDGrid,
+    decompose_signed_distribution,
+    grid_nd,
+    grid_x,
+    signed_amplitudes_from_function,
 )
-from .simulate import (
-    build_circuit,
-    run_shots,
-    counts_to_distribution,
-    run_shots_signed,
-    counts_to_signed_distribution,
-    run_two_channel_signed,
-    estimate_expectation_signed,
-    SignedDistribution,
-    TwoChannelResult,
-)
-from .plot import plot_comparison, plot_signed_comparison, plot_comparison_2d
-from . import feynman_dataset
-
-from . import qfan
+from .plot import plot_comparison, plot_comparison_2d, plot_signed_comparison
 from .qfan import (
-    QFANBlock,
-    QKANBlock,
-    QFANConfig,
     BenchmarkConfig,
     FeynmanQFANResult,
-    train_qfan,
-    train_feynman_equation,
+    QFANBlock,
+    QFANConfig,
+    QuantumActivationClassifier,
+    QuantumActivationConfig,
     run_feynman_benchmark,
+    train_feynman_equation,
+    train_qfan,
+    train_quantum_activation_classifier,
 )
+from .simulate import (
+    SignedDistribution,
+    TwoChannelResult,
+    counts_to_distribution,
+    counts_to_signed_distribution,
+    estimate_expectation_signed,
+    run_shots,
+    run_shots_signed,
+    run_two_channel_signed,
+)
+
+__all__ = [
+    "BenchmarkConfig",
+    "ClassificationDataset",
+    "FeynmanQFANResult",
+    "NDGrid",
+    "PreparedClassificationSplit",
+    "QFANBlock",
+    "QFANConfig",
+    "QKANBlock",
+    "QuantumActivationClassifier",
+    "QuantumActivationConfig",
+    "SignedAmplitudes",
+    "SignedDecomposition",
+    "SignedDistribution",
+    "TwoChannelResult",
+    "amplitudes_from_function",
+    "amplitudes_from_function_nd",
+    "counts_to_distribution",
+    "counts_to_signed_distribution",
+    "datasets",
+    "decompose_signed_distribution",
+    "estimate_expectation_signed",
+    "feynman_dataset",
+    "grid_nd",
+    "grid_x",
+    "load_classification_dataset",
+    "prepare_classification_split",
+    "plot_comparison",
+    "plot_comparison_2d",
+    "plot_signed_comparison",
+    "qfan",
+    "run_feynman_benchmark",
+    "run_shots",
+    "run_shots_signed",
+    "run_two_channel_signed",
+    "signed_amplitudes_from_function",
+    "train_feynman_equation",
+    "train_qfan",
+    "train_quantum_activation_classifier",
+]
+
+
+def __getattr__(name: str):
+    if name == "QKANBlock":
+        warnings.warn(
+            (
+                "QKANBlock is deprecated and will be removed in a future release; "
+                "use QFANBlock instead."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return QFANBlock
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

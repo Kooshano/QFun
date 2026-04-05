@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from .. import feynman_dataset
-
 from .config import QFANConfig
 from .encoding import normalize_from_domain
 from .model import QFANBlock

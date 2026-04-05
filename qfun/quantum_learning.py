@@ -17,18 +17,8 @@ import numpy as np
 import pennylane as qml
 import pennylane.numpy as pnp
 
+from ._utils import EPS, _samples_to_counts, _to_numpy_float
 from .simulate import counts_to_distribution, counts_to_signed_distribution, run_two_channel_signed
-
-
-EPS = 1e-12
-
-
-def _to_numpy_float(x) -> np.ndarray:
-    """Real float64 ndarray from PennyLane/autograd outputs (avoids ComplexWarning on cast)."""
-    arr = np.asarray(qml.math.unwrap(x))
-    if np.iscomplexobj(arr):
-        arr = arr.real
-    return arr.astype(np.float64, copy=False)
 
 
 @contextlib.contextmanager
@@ -153,16 +143,6 @@ def make_mode_a_prob_qnode(n_qubits: int, shots: int | None = None):
         return qml.probs(wires=wires)
 
     return qnode
-
-
-def _samples_to_counts(samples: np.ndarray) -> dict[str, int]:
-    if samples.ndim == 1:
-        samples = samples.reshape(1, -1)
-    counts: dict[str, int] = {}
-    for row in samples:
-        key = "".join(str(int(bit)) for bit in row)
-        counts[key] = counts.get(key, 0) + 1
-    return counts
 
 
 def _sample_state(amplitudes: np.ndarray, n_wires: int, shots: int) -> dict[str, int]:
@@ -434,3 +414,24 @@ def measure_mode_b_superposition(
         n_qubits,
         shots=shots,
     )
+
+
+__all__ = [
+    "HistogramMeasurement",
+    "ModeATrainingResult",
+    "ModeBTrainingResult",
+    "SignedMeasurement",
+    "StandardTrainingResult",
+    "make_mode_a_prob_qnode",
+    "make_standard_prob_qnode",
+    "measure_mode_a_superposition",
+    "measure_mode_b_superposition",
+    "measure_standard_superposition",
+    "normalize_real_amplitudes",
+    "softmax_weights",
+    "target_probability_from_function",
+    "target_signed_profile_from_function",
+    "train_mode_a_superposition",
+    "train_mode_b_superposition",
+    "train_standard_superposition",
+]
