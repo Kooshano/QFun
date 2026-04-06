@@ -109,11 +109,15 @@ def _forward(
     num_grid_points: int,
     x_grid: Any,
     eps: float,
+    *,
+    tanh_preactivation: bool,
 ) -> Any:
     hidden_weights, hidden_biases, w_out, b_out = params[:4]
     hidden = x
     for layer_idx, (weights, biases) in enumerate(zip(hidden_weights, hidden_biases)):
         z = hidden @ weights.T + biases
+        if tanh_preactivation:
+            z = jnp.tanh(z)
         profiles = _layer_profiles(mode, params, layer_idx, num_grid_points, eps)
         hidden = _interp_hidden(z, profiles, x_grid)
     return hidden @ w_out.T + b_out
@@ -226,8 +230,18 @@ def train_quantum_activation_classifier_jax(
     key, k_init = jax.random.split(key)
     params = _init_params(k_init, config)
 
+    _tanh_pre = config.hidden_preactivation == "tanh"
+
     def loss_batch(p: Any, xb: Any, yb: Any) -> Any:
-        logits = _forward(p, xb, config.mode, num_grid_points, x_grid, EPS)
+        logits = _forward(
+            p,
+            xb,
+            config.mode,
+            num_grid_points,
+            x_grid,
+            EPS,
+            tanh_preactivation=_tanh_pre,
+        )
         logp = logits - jax.nn.logsumexp(logits, axis=1, keepdims=True)
         return -jnp.mean(jnp.sum(yb * logp, axis=1))
 

@@ -73,6 +73,10 @@ class QuantumActivationConfig:
     batch_size: int = 512
     #: If ``True``, show a tqdm progress bar during training when ``tqdm`` is installed.
     show_training_progress: bool = False
+    #: ``"superposition"``: linear pre-activation, then interpolation on the learned profile
+    #: (values clipped to the grid). ``"tanh"``: apply ``tanh`` before interpolation so
+    #: inputs stay in ``(-1, 1)`` (legacy bounded path, often easier to optimize).
+    hidden_preactivation: str = "superposition"
 
     def resolved_hidden_layers(self) -> tuple[int, ...]:
         """Return the effective hidden-layer widths.
@@ -117,6 +121,11 @@ class QuantumActivationClassifier:
             raise ValueError("n_qubits must be positive.")
         if config.n_classes <= 1:
             raise ValueError("n_classes must be at least 2.")
+        if config.hidden_preactivation not in {"superposition", "tanh"}:
+            raise ValueError(
+                'hidden_preactivation must be "superposition" or "tanh", '
+                f"got {config.hidden_preactivation!r}."
+            )
 
         self.input_dim = int(config.input_dim)
         self.hidden_layer_sizes = hidden_layers
@@ -125,6 +134,7 @@ class QuantumActivationClassifier:
         self.n_qubits = int(config.n_qubits)
         self.n_classes = int(config.n_classes)
         self.mode = config.mode
+        self.hidden_preactivation = config.hidden_preactivation
         self.num_grid_points = 2**self.n_qubits
         self.activation_grid = pnp.array(np.linspace(-1.0, 1.0, self.num_grid_points))
 
@@ -313,6 +323,8 @@ class QuantumActivationClassifier:
         features = []
         for unit_idx in range(self.hidden_layer_sizes[layer_idx]):
             z = pnp.dot(self.hidden_weights[layer_idx][unit_idx], x_vec) + self.hidden_biases[layer_idx][unit_idx]
+            if self.hidden_preactivation == "tanh":
+                z = pnp.tanh(z)
             features.append(self._interp_value(self._profile_expr(layer_idx, unit_idx), z))
         return pnp.array(features)
 
@@ -332,23 +344,23 @@ class QuantumActivationClassifier:
         xb = pnp.array(x_batch, dtype=float)
         return pnp.array([self.forward_logits(x_i) for x_i in xb])
 
-    def _activation_profile_np(self, unit_idx: int) -> np.ndarray:
+    def _activation_profile_np(self, layer_idx: int, unit_idx: int) -> np.ndarray:
         """Same profile as ``_profile_expr``, purely NumPy (for fast batched inference)."""
-        self._validate_unit_idx(unit_idx)
+        self._validate_layer_unit_idx(layer_idx, unit_idx)
         g = float(self.num_grid_points)
         if self.mode == "standard":
-            raw = np.asarray(self.raw_profiles[unit_idx], dtype=float)
+            raw = np.asarray(self.raw_profiles_layers[layer_idx][unit_idx], dtype=float)
             amps = _norm_amp_np(raw)
             return g * (amps**2)
         if self.mode == "mode_a":
-            raw = np.asarray(self.raw_profiles[unit_idx], dtype=float)
+            raw = np.asarray(self.raw_profiles_layers[layer_idx][unit_idx], dtype=float)
             amps = _norm_amp_np(raw)
             fp = amps**2
             q = fp[0::2] - fp[1::2]
             return g * q
-        rp = np.asarray(self.raw_plus[unit_idx], dtype=float)
-        rm = np.asarray(self.raw_minus[unit_idx], dtype=float)
-        lg = np.asarray(self.raw_channel_logits[unit_idx], dtype=float)
+        rp = np.asarray(self.raw_plus_layers[layer_idx][unit_idx], dtype=float)
+        rm = np.asarray(self.raw_minus_layers[layer_idx][unit_idx], dtype=float)
+        lg = np.asarray(self.raw_channel_logits_layers[layer_idx][unit_idx], dtype=float)
         pp = _norm_amp_np(rp) ** 2
         pm = _norm_amp_np(rm) ** 2
         z = _softmax2_np(lg)
@@ -356,20 +368,25 @@ class QuantumActivationClassifier:
 
     def _forward_batch_numpy(self, x: np.ndarray) -> np.ndarray:
         """Vectorized forward pass for metrics / prediction (no per-sample PennyLane)."""
-        xb = np.asarray(x, dtype=np.float64)
-        if xb.ndim == 1:
-            xb = xb.reshape(1, -1)
-        w_in = np.asarray(self.W_in, dtype=np.float64)
-        b_in = np.asarray(self.b_in, dtype=np.float64)
+        hidden = np.asarray(x, dtype=np.float64)
+        if hidden.ndim == 1:
+            hidden = hidden.reshape(1, -1)
+        x_grid = np.asarray(self.activation_grid, dtype=np.float64)
+        n = hidden.shape[0]
         w_out = np.asarray(self.W_out, dtype=np.float64)
         b_out = np.asarray(self.b_out, dtype=np.float64)
-        z = np.tanh(xb @ w_in.T + b_in)
-        x_grid = np.asarray(self.activation_grid, dtype=np.float64)
-        n = xb.shape[0]
-        hidden = np.empty((n, self.hidden_units), dtype=np.float64)
-        for h in range(self.hidden_units):
-            prof = self._activation_profile_np(h)
-            hidden[:, h] = _interp_values_np(z[:, h], x_grid, prof)
+        for layer_idx in range(self.num_hidden_layers):
+            w = np.asarray(self.hidden_weights[layer_idx], dtype=np.float64)
+            b = np.asarray(self.hidden_biases[layer_idx], dtype=np.float64)
+            z_pre = hidden @ w.T + b
+            if self.hidden_preactivation == "tanh":
+                z_pre = np.tanh(z_pre)
+            width = self.hidden_layer_sizes[layer_idx]
+            out = np.empty((n, width), dtype=np.float64)
+            for h in range(width):
+                prof = self._activation_profile_np(layer_idx, h)
+                out[:, h] = _interp_values_np(z_pre[:, h], x_grid, prof)
+            hidden = out
         return hidden @ w_out.T + b_out
 
     def predict_proba(self, x_batch: Any) -> np.ndarray:

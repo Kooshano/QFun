@@ -176,6 +176,7 @@ def run_quantum_experiment(
     use_jax: bool = False,
     batch_size: int = 512,
     show_training_progress: bool = False,
+    hidden_preactivation: str = "superposition",
 ) -> QuantumExperimentResult:
     """Train one quantum-activation classifier and collect notebook-facing diagnostics."""
     cfg = QuantumActivationConfig(
@@ -191,6 +192,7 @@ def run_quantum_experiment(
         use_jax=use_jax,
         batch_size=batch_size,
         show_training_progress=show_training_progress,
+        hidden_preactivation=hidden_preactivation,
     )
     tracked_units = tuple(
         (layer_idx, unit_idx)

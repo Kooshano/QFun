@@ -160,3 +160,37 @@ def test_jax_training_supported_for_each_mode(iris_split_arrays):
         assert len(losses) == 2
         assert losses[-1] < float("inf")
         assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0
+
+
+def test_invalid_hidden_preactivation_raises():
+    cfg = QuantumActivationConfig(
+        input_dim=4,
+        hidden_units=3,
+        n_qubits=3,
+        n_classes=3,
+        hidden_preactivation="relu",
+    )
+    with pytest.raises(ValueError, match="hidden_preactivation"):
+        QuantumActivationClassifier(cfg)
+
+
+def test_jax_tanh_preactivation_runs(iris_split_arrays):
+    pytest.importorskip("jax")
+    pytest.importorskip("optax")
+    x_train, x_test, y_train, y_test = iris_split_arrays
+    cfg = QuantumActivationConfig(
+        input_dim=4,
+        hidden_units=4,
+        n_qubits=3,
+        n_classes=3,
+        mode="standard",
+        steps=2,
+        seed=1,
+        use_jax=True,
+        batch_size=32,
+        hidden_preactivation="tanh",
+    )
+    model, losses = train_quantum_activation_classifier(x_train, y_train, cfg)
+    assert len(losses) == 2
+    assert model.hidden_preactivation == "tanh"
+    assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0

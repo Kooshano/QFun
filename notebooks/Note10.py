@@ -160,7 +160,7 @@ def _save_quantum_artifacts(tag: str, result: QuantumExperimentResult) -> None:
 # %% [markdown]
 # ## Config
 #
-# Defaults mirror notebook 08. `use_jax=True` enables minibatch Adam on JAX (CPU or GPU). Without JAX installed, set `use_jax=False` (expect long runtimes on ~52k training points). Use `log_every=1` for a loss line every epoch and `show_training_progress=True` with `tqdm` installed for a live minibatch bar (JAX) or epoch bar (PennyLane).
+# Defaults mirror notebook 08. `use_jax=True` enables minibatch Adam on JAX (CPU or GPU). Without JAX installed, set `use_jax=False` (expect long runtimes on ~52k training points). Use `log_every=1` for a loss line every epoch and `show_training_progress=True` with `tqdm` installed for a live minibatch bar (JAX) or epoch bar (PennyLane). `hidden_preactivation`: `"superposition"` (linear → profile) or `"tanh"` (bounded inputs to the grid).
 #
 
 # %%
@@ -186,6 +186,8 @@ except ImportError:
     print('Tip: pip install "qfun[gpu]" for JAX training on full MNIST (much faster).')
 
 batch_size = 1024
+# ``superposition``: linear pre-activation → profile interp. ``tanh``: tanh before interp (bounded).
+hidden_preactivation = "superposition"
 
 _save_json(
     OUTPUT_ROOT / "config.json",
@@ -203,6 +205,7 @@ _save_json(
         "eval_shots": eval_shots,
         "use_jax": use_jax,
         "batch_size": batch_size,
+        "hidden_preactivation": hidden_preactivation,
         "run_id": RUN_ID,
     },
 )
@@ -280,6 +283,7 @@ standard_result = run_quantum_experiment(
     use_jax=use_jax,
     batch_size=batch_size,
     show_training_progress=show_training_progress,
+    hidden_preactivation=hidden_preactivation,
 )
 display_quantum_result(standard_result, class_names)
 _save_quantum_artifacts("standard", standard_result)
@@ -311,6 +315,7 @@ mode_a_result = run_quantum_experiment(
     use_jax=use_jax,
     batch_size=batch_size,
     show_training_progress=show_training_progress,
+    hidden_preactivation=hidden_preactivation,
 )
 display_quantum_result(mode_a_result, class_names)
 _save_quantum_artifacts("mode_a", mode_a_result)
@@ -342,6 +347,7 @@ mode_b_result = run_quantum_experiment(
     use_jax=use_jax,
     batch_size=batch_size,
     show_training_progress=show_training_progress,
+    hidden_preactivation=hidden_preactivation,
 )
 display_quantum_result(mode_b_result, class_names)
 _save_quantum_artifacts("mode_b", mode_b_result)
