@@ -124,7 +124,9 @@ The maintained notebooks live in [notebooks](notebooks):
 9. [09_qfun_superposition_activation_ablation.ipynb](notebooks/09_qfun_superposition_activation_ablation.ipynb)  
    Paper-style ablations over mode choice, qubit count, hidden width, and measurement sensitivity.
 10. [10_qfun_superposition_activations_mnist.ipynb](notebooks/10_qfun_superposition_activations_mnist.ipynb)  
-   Continue the digits benchmark on PCA-compressed MNIST, using a reproducible stratified subset to keep notebook runtime practical.
+   Run the single-layer superposition-activation classifier on PCA-compressed full MNIST.
+11. [11_qfun_superposition_activations_mnist_deep.ipynb](notebooks/11_qfun_superposition_activations_mnist_deep.ipynb)  
+   Extend the same MNIST benchmark to a deeper stack of learned superposition activations with `hidden_layers=(6, 6)`.
 
 If you installed the dev extras, open them with Jupyter:
 
@@ -165,6 +167,8 @@ from qfun.qfan import (
     run_feynman_benchmark,
 )
 ```
+
+`QuantumActivationConfig` supports both the legacy single-layer form (`hidden_units=6`) and the deep form (`hidden_layers=(6, 6)`).
 
 `QKANBlock` remains available as a deprecated alias for `QFANBlock` (emits `DeprecationWarning` on use). Prefer `QFANBlock` in new code.
 

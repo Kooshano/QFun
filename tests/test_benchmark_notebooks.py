@@ -7,6 +7,7 @@ NOTEBOOKS = [
     "notebooks/08_qfun_superposition_activations_digits.ipynb",
     "notebooks/09_qfun_superposition_activation_ablation.ipynb",
     "notebooks/10_qfun_superposition_activations_mnist.ipynb",
+    "notebooks/11_qfun_superposition_activations_mnist_deep.ipynb",
 ]
 
 

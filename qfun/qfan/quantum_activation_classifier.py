@@ -60,6 +60,7 @@ def _interp_values_np(z: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, eps
 class QuantumActivationConfig:
     input_dim: int
     hidden_units: int = 6
+    hidden_layers: tuple[int, ...] | None = None
     n_qubits: int = 4
     n_classes: int = 3
     mode: str = "standard"
@@ -72,6 +73,22 @@ class QuantumActivationConfig:
     batch_size: int = 512
     #: If ``True``, show a tqdm progress bar during training when ``tqdm`` is installed.
     show_training_progress: bool = False
+
+    def resolved_hidden_layers(self) -> tuple[int, ...]:
+        """Return the effective hidden-layer widths.
+
+        ``hidden_units`` remains as a single-layer compatibility alias. When
+        ``hidden_layers`` is provided it takes precedence.
+        """
+        if self.hidden_layers is None:
+            layers = (int(self.hidden_units),)
+        else:
+            layers = tuple(int(width) for width in self.hidden_layers)
+        if not layers:
+            raise ValueError("hidden_layers must contain at least one hidden layer.")
+        if any(width <= 0 for width in layers):
+            raise ValueError("All hidden layer widths must be positive.")
+        return layers
 
 
 @dataclass(frozen=True)
@@ -95,15 +112,16 @@ class QuantumActivationClassifier:
             raise ValueError("mode must be 'standard', 'mode_a', or 'mode_b'.")
         if config.input_dim <= 0:
             raise ValueError("input_dim must be positive.")
-        if config.hidden_units <= 0:
-            raise ValueError("hidden_units must be positive.")
+        hidden_layers = config.resolved_hidden_layers()
         if config.n_qubits <= 0:
             raise ValueError("n_qubits must be positive.")
         if config.n_classes <= 1:
             raise ValueError("n_classes must be at least 2.")
 
         self.input_dim = int(config.input_dim)
-        self.hidden_units = int(config.hidden_units)
+        self.hidden_layer_sizes = hidden_layers
+        self.num_hidden_layers = len(hidden_layers)
+        self.hidden_units = hidden_layers[-1]
         self.n_qubits = int(config.n_qubits)
         self.n_classes = int(config.n_classes)
         self.mode = config.mode
@@ -111,16 +129,27 @@ class QuantumActivationClassifier:
         self.activation_grid = pnp.array(np.linspace(-1.0, 1.0, self.num_grid_points))
 
         rng = np.random.default_rng(config.seed)
-        self.W_in = pnp.array(
-            rng.normal(scale=0.35, size=(self.hidden_units, self.input_dim)),
-            requires_grad=True,
-        )
-        self.b_in = pnp.array(
-            rng.normal(scale=0.05, size=(self.hidden_units,)),
-            requires_grad=True,
-        )
+
+        self.hidden_weights: list[Any] = []
+        self.hidden_biases: list[Any] = []
+        prev_dim = self.input_dim
+        for width in self.hidden_layer_sizes:
+            self.hidden_weights.append(
+                pnp.array(
+                    rng.normal(scale=0.35, size=(width, prev_dim)),
+                    requires_grad=True,
+                )
+            )
+            self.hidden_biases.append(
+                pnp.array(
+                    rng.normal(scale=0.05, size=(width,)),
+                    requires_grad=True,
+                )
+            )
+            prev_dim = width
+
         self.W_out = pnp.array(
-            rng.normal(scale=0.35, size=(self.n_classes, self.hidden_units)),
+            rng.normal(scale=0.35, size=(self.n_classes, self.hidden_layer_sizes[-1])),
             requires_grad=True,
         )
         self.b_out = pnp.array(
@@ -128,46 +157,104 @@ class QuantumActivationClassifier:
             requires_grad=True,
         )
 
-        if self.mode == "standard":
-            self.raw_profiles = pnp.array(
-                rng.normal(scale=0.25, size=(self.hidden_units, self.num_grid_points)),
-                requires_grad=True,
-            )
-        elif self.mode == "mode_a":
-            self.raw_profiles = pnp.array(
-                rng.normal(scale=0.25, size=(self.hidden_units, 2 * self.num_grid_points)),
-                requires_grad=True,
-            )
+        if self.mode in {"standard", "mode_a"}:
+            profile_width = self.num_grid_points if self.mode == "standard" else 2 * self.num_grid_points
+            self.raw_profiles_layers = [
+                pnp.array(
+                    rng.normal(scale=0.25, size=(width, profile_width)),
+                    requires_grad=True,
+                )
+                for width in self.hidden_layer_sizes
+            ]
         else:
-            self.raw_plus = pnp.array(
-                rng.normal(scale=0.25, size=(self.hidden_units, self.num_grid_points)),
-                requires_grad=True,
-            )
-            self.raw_minus = pnp.array(
-                rng.normal(scale=0.25, size=(self.hidden_units, self.num_grid_points)),
-                requires_grad=True,
-            )
-            self.raw_channel_logits = pnp.array(
-                rng.normal(scale=0.05, size=(self.hidden_units, 2)),
-                requires_grad=True,
-            )
+            self.raw_plus_layers = [
+                pnp.array(
+                    rng.normal(scale=0.25, size=(width, self.num_grid_points)),
+                    requires_grad=True,
+                )
+                for width in self.hidden_layer_sizes
+            ]
+            self.raw_minus_layers = [
+                pnp.array(
+                    rng.normal(scale=0.25, size=(width, self.num_grid_points)),
+                    requires_grad=True,
+                )
+                for width in self.hidden_layer_sizes
+            ]
+            self.raw_channel_logits_layers = [
+                pnp.array(
+                    rng.normal(scale=0.05, size=(width, 2)),
+                    requires_grad=True,
+                )
+                for width in self.hidden_layer_sizes
+            ]
+
+        self._sync_legacy_aliases()
+
+    def _sync_legacy_aliases(self) -> None:
+        """Keep first-layer aliases available for backward compatibility."""
+        self.W_in = self.hidden_weights[0]
+        self.b_in = self.hidden_biases[0]
+        if self.mode in {"standard", "mode_a"}:
+            self.raw_profiles = self.raw_profiles_layers[0]
+        else:
+            self.raw_plus = self.raw_plus_layers[0]
+            self.raw_minus = self.raw_minus_layers[0]
+            self.raw_channel_logits = self.raw_channel_logits_layers[0]
 
     def parameters(self) -> list[Any]:
-        base = [self.W_in, self.b_in, self.W_out, self.b_out]
+        base: list[Any] = [
+            *self.hidden_weights,
+            *self.hidden_biases,
+            self.W_out,
+            self.b_out,
+        ]
         if self.mode in {"standard", "mode_a"}:
-            return base + [self.raw_profiles]
-        return base + [self.raw_plus, self.raw_minus, self.raw_channel_logits]
+            return base + list(self.raw_profiles_layers)
+        return base + list(self.raw_plus_layers) + list(self.raw_minus_layers) + list(self.raw_channel_logits_layers)
 
     def set_parameters(self, *params: Any) -> None:
-        self.W_in, self.b_in, self.W_out, self.b_out = params[:4]
-        if self.mode in {"standard", "mode_a"}:
-            self.raw_profiles = params[4]
-        else:
-            self.raw_plus, self.raw_minus, self.raw_channel_logits = params[4:]
+        n_layers = self.num_hidden_layers
+        base_count = 2 * n_layers + 2
+        if len(params) < base_count:
+            raise ValueError(f"Expected at least {base_count} parameters, got {len(params)}.")
 
-    def _validate_unit_idx(self, unit_idx: int) -> None:
-        if unit_idx < 0 or unit_idx >= self.hidden_units:
-            raise IndexError(f"unit_idx must be in [0, {self.hidden_units - 1}], got {unit_idx}")
+        self.hidden_weights = list(params[:n_layers])
+        self.hidden_biases = list(params[n_layers : 2 * n_layers])
+        self.W_out = params[2 * n_layers]
+        self.b_out = params[2 * n_layers + 1]
+
+        remaining = list(params[base_count:])
+        if self.mode in {"standard", "mode_a"}:
+            if len(remaining) != n_layers:
+                raise ValueError(f"Expected {n_layers} activation tensors, got {len(remaining)}.")
+            self.raw_profiles_layers = remaining
+        else:
+            expected = 3 * n_layers
+            if len(remaining) != expected:
+                raise ValueError(f"Expected {expected} activation tensors, got {len(remaining)}.")
+            self.raw_plus_layers = remaining[:n_layers]
+            self.raw_minus_layers = remaining[n_layers : 2 * n_layers]
+            self.raw_channel_logits_layers = remaining[2 * n_layers :]
+
+        self._sync_legacy_aliases()
+
+    def _parse_layer_unit_args(self, layer_or_unit: int, unit_idx: int | None) -> tuple[int, int]:
+        if unit_idx is None:
+            if self.num_hidden_layers != 1:
+                raise ValueError(
+                    "Multi-layer models require both layer_idx and unit_idx. "
+                    "Use get_activation_profile(layer_idx, unit_idx)."
+                )
+            return 0, int(layer_or_unit)
+        return int(layer_or_unit), int(unit_idx)
+
+    def _validate_layer_unit_idx(self, layer_idx: int, unit_idx: int) -> None:
+        if layer_idx < 0 or layer_idx >= self.num_hidden_layers:
+            raise IndexError(f"layer_idx must be in [0, {self.num_hidden_layers - 1}], got {layer_idx}")
+        layer_width = self.hidden_layer_sizes[layer_idx]
+        if unit_idx < 0 or unit_idx >= layer_width:
+            raise IndexError(f"unit_idx must be in [0, {layer_width - 1}], got {unit_idx}")
 
     def _standard_profile(self, raw_params: Any) -> Any:
         amps = normalize_real_amplitudes(raw_params)
@@ -189,16 +276,16 @@ class QuantumActivationClassifier:
         q = z[0] * p_plus - z[1] * p_minus
         return self.num_grid_points * q
 
-    def _profile_expr(self, unit_idx: int) -> Any:
-        self._validate_unit_idx(unit_idx)
+    def _profile_expr(self, layer_idx: int, unit_idx: int) -> Any:
+        self._validate_layer_unit_idx(layer_idx, unit_idx)
         if self.mode == "standard":
-            return self._standard_profile(self.raw_profiles[unit_idx])
+            return self._standard_profile(self.raw_profiles_layers[layer_idx][unit_idx])
         if self.mode == "mode_a":
-            return self._mode_a_profile(self.raw_profiles[unit_idx])
+            return self._mode_a_profile(self.raw_profiles_layers[layer_idx][unit_idx])
         return self._mode_b_profile(
-            self.raw_plus[unit_idx],
-            self.raw_minus[unit_idx],
-            self.raw_channel_logits[unit_idx],
+            self.raw_plus_layers[layer_idx][unit_idx],
+            self.raw_minus_layers[layer_idx][unit_idx],
+            self.raw_channel_logits_layers[layer_idx][unit_idx],
         )
 
     def _interp_value(self, y_grid: Any, z: Any) -> Any:
@@ -218,16 +305,24 @@ class QuantumActivationClassifier:
         t = (z - x0) / denom
         return (1.0 - t) * y0 + t * y1
 
-    def hidden_features(self, x: Any) -> Any:
-        x_vec = pnp.array(x, dtype=float)
+    def _apply_hidden_layer(self, inputs: Any, layer_idx: int) -> Any:
+        x_vec = pnp.array(inputs, dtype=float)
         if x_vec.ndim == 0:
             x_vec = x_vec.reshape(1)
 
         features = []
-        for unit_idx in range(self.hidden_units):
-            z = pnp.tanh(pnp.dot(self.W_in[unit_idx], x_vec) + self.b_in[unit_idx])
-            features.append(self._interp_value(self._profile_expr(unit_idx), z))
+        for unit_idx in range(self.hidden_layer_sizes[layer_idx]):
+            z = pnp.dot(self.hidden_weights[layer_idx][unit_idx], x_vec) + self.hidden_biases[layer_idx][unit_idx]
+            features.append(self._interp_value(self._profile_expr(layer_idx, unit_idx), z))
         return pnp.array(features)
+
+    def hidden_features(self, x: Any) -> Any:
+        hidden = pnp.array(x, dtype=float)
+        if hidden.ndim == 0:
+            hidden = hidden.reshape(1)
+        for layer_idx in range(self.num_hidden_layers):
+            hidden = self._apply_hidden_layer(hidden, layer_idx)
+        return hidden
 
     def forward_logits(self, x: Any) -> Any:
         hidden = self.hidden_features(x)
@@ -290,14 +385,21 @@ class QuantumActivationClassifier:
         y = np.asarray(y_true, dtype=int)
         return float(np.mean(self.predict(x_batch) == y))
 
-    def get_activation_profile(self, unit_idx: int) -> np.ndarray:
-        return _to_numpy_float(self._profile_expr(unit_idx))
+    def get_activation_profile(self, layer_idx: int, unit_idx: int | None = None) -> np.ndarray:
+        layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
+        return _to_numpy_float(self._profile_expr(layer_idx, unit_idx))
 
-    def measure_activation_profile(self, unit_idx: int, shots: int = 5000) -> ActivationMeasurement:
-        self._validate_unit_idx(unit_idx)
+    def measure_activation_profile(
+        self,
+        layer_idx: int,
+        unit_idx: int | None = None,
+        shots: int = 5000,
+    ) -> ActivationMeasurement:
+        layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
+        self._validate_layer_unit_idx(layer_idx, unit_idx)
 
         if self.mode == "standard":
-            amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_profiles[unit_idx]))
+            amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_profiles_layers[layer_idx][unit_idx]))
             measurement = measure_standard_superposition(amplitudes, self.n_qubits, shots=shots)
             return ActivationMeasurement(
                 mode=self.mode,
@@ -306,7 +408,7 @@ class QuantumActivationClassifier:
             )
 
         if self.mode == "mode_a":
-            amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_profiles[unit_idx]))
+            amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_profiles_layers[layer_idx][unit_idx]))
             measurement = measure_mode_a_superposition(amplitudes, self.n_qubits, shots=shots)
             return ActivationMeasurement(
                 mode=self.mode,
@@ -316,9 +418,9 @@ class QuantumActivationClassifier:
                 p_neg=measurement.p_neg,
             )
 
-        p_plus_amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_plus[unit_idx]))
-        p_minus_amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_minus[unit_idx]))
-        z = _to_numpy_float(softmax_weights(self.raw_channel_logits[unit_idx]))
+        p_plus_amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_plus_layers[layer_idx][unit_idx]))
+        p_minus_amplitudes = _to_numpy_float(normalize_real_amplitudes(self.raw_minus_layers[layer_idx][unit_idx]))
+        z = _to_numpy_float(softmax_weights(self.raw_channel_logits_layers[layer_idx][unit_idx]))
         measurement = measure_mode_b_superposition(
             p_plus_amplitudes,
             p_minus_amplitudes,
@@ -330,6 +432,7 @@ class QuantumActivationClassifier:
         return ActivationMeasurement(
             mode=self.mode,
             profile=self.num_grid_points * measurement.q_hat,
+            counts=None,
             p_plus=measurement.p_plus_hat,
             p_minus=measurement.p_minus_hat,
             z_plus=measurement.z_plus,
@@ -438,4 +541,3 @@ def train_quantum_activation_classifier(
         epoch_pbar.close()
 
     return model, np.asarray(losses, dtype=float)
-

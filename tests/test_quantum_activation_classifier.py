@@ -8,6 +8,18 @@ from qfun.qfan.quantum_activation_classifier import (
 )
 
 
+def test_hidden_layers_validation_and_legacy_hidden_units_alias():
+    legacy_cfg = QuantumActivationConfig(input_dim=4, hidden_units=5)
+    assert legacy_cfg.resolved_hidden_layers() == (5,)
+
+    with pytest.raises(ValueError):
+        QuantumActivationConfig(input_dim=4, hidden_layers=()).resolved_hidden_layers()
+    with pytest.raises(ValueError):
+        QuantumActivationConfig(input_dim=4, hidden_layers=(4, 0)).resolved_hidden_layers()
+    with pytest.raises(ValueError):
+        QuantumActivationConfig(input_dim=4, hidden_layers=(4, -2)).resolved_hidden_layers()
+
+
 def test_forward_batch_returns_three_class_probabilities(iris_split_arrays):
     x_train, _, _, _ = iris_split_arrays
     cfg = QuantumActivationConfig(input_dim=4, hidden_units=4, n_qubits=3, n_classes=3)
@@ -21,23 +33,44 @@ def test_forward_batch_returns_three_class_probabilities(iris_split_arrays):
 
 def test_activation_profiles_and_measurements_have_expected_shapes():
     for mode in ["standard", "mode_a", "mode_b"]:
-        cfg = QuantumActivationConfig(input_dim=4, hidden_units=4, n_qubits=3, mode=mode)
-        model = QuantumActivationClassifier(cfg)
+        single_cfg = QuantumActivationConfig(input_dim=4, hidden_units=4, n_qubits=3, mode=mode)
+        single_model = QuantumActivationClassifier(single_cfg)
 
-        profile = model.get_activation_profile(0)
-        measurement = model.measure_activation_profile(0, shots=400)
+        single_profile = single_model.get_activation_profile(0)
+        single_measurement = single_model.measure_activation_profile(0, shots=400)
 
-        assert profile.shape == (8,)
-        assert measurement.profile.shape == (8,)
-        assert np.all(np.isfinite(profile))
-        assert np.all(np.isfinite(measurement.profile))
+        assert single_profile.shape == (8,)
+        assert single_measurement.profile.shape == (8,)
+        assert np.all(np.isfinite(single_profile))
+        assert np.all(np.isfinite(single_measurement.profile))
+
+        deep_cfg = QuantumActivationConfig(input_dim=4, hidden_layers=(3, 3), n_qubits=3, mode=mode)
+        deep_model = QuantumActivationClassifier(deep_cfg)
+
+        deep_profile = deep_model.get_activation_profile(1, 2)
+        deep_measurement = deep_model.measure_activation_profile(1, 2, shots=400)
+
+        assert deep_profile.shape == (8,)
+        assert deep_measurement.profile.shape == (8,)
+        assert np.all(np.isfinite(deep_profile))
+        assert np.all(np.isfinite(deep_measurement.profile))
+
+
+def test_multi_layer_models_require_explicit_layer_indices():
+    cfg = QuantumActivationConfig(input_dim=4, hidden_layers=(3, 3), n_qubits=3)
+    model = QuantumActivationClassifier(cfg)
+
+    with pytest.raises(ValueError):
+        model.get_activation_profile(0)
+    with pytest.raises(ValueError):
+        model.measure_activation_profile(0, shots=200)
 
 
 def test_standard_classifier_training_reduces_loss_and_beats_random_guessing(iris_split_arrays):
     x_train, x_test, y_train, y_test = iris_split_arrays
     cfg = QuantumActivationConfig(
         input_dim=4,
-        hidden_units=4,
+        hidden_layers=(4, 4),
         n_qubits=3,
         n_classes=3,
         mode="standard",
@@ -58,7 +91,7 @@ def test_signed_modes_train_with_finite_metrics(iris_split_arrays):
     for mode in ["mode_a", "mode_b"]:
         cfg = QuantumActivationConfig(
             input_dim=4,
-            hidden_units=4,
+            hidden_layers=(4, 4),
             n_qubits=3,
             n_classes=3,
             mode=mode,
@@ -114,7 +147,7 @@ def test_jax_training_supported_for_each_mode(iris_split_arrays):
     for mode in ("standard", "mode_a", "mode_b"):
         cfg = QuantumActivationConfig(
             input_dim=4,
-            hidden_units=3,
+            hidden_layers=(3, 3),
             n_qubits=3,
             n_classes=3,
             mode=mode,

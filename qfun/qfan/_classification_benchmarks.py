@@ -24,6 +24,8 @@ from .quantum_activation_classifier import (
     train_quantum_activation_classifier,
 )
 
+LayerUnit = tuple[int, int]
+
 
 @dataclass(frozen=True)
 class TrainingSnapshot:
@@ -72,7 +74,8 @@ class QuantumExperimentResult:
     y_pred: np.ndarray
     confusion_matrix: np.ndarray
     classification_report: str
-    representative_units: tuple[int, ...]
+    tracked_units: tuple[LayerUnit, ...]
+    representative_units: tuple[LayerUnit, ...]
     measurements: tuple[ActivationMeasurement, ...]
     eval_shots: int
     snapshot_interval: int
@@ -142,11 +145,18 @@ def run_default_baseline_suite(
     }
 
 
-def representative_units(model: QuantumActivationClassifier, k: int = 2) -> list[int]:
-    """Pick hidden units with the largest output-layer norms."""
-    scores = np.linalg.norm(np.asarray(model.W_out, dtype=float), axis=0)
-    order = np.argsort(scores)[::-1]
-    return [int(idx) for idx in order[: min(k, model.hidden_units)]]
+def representative_units(model: QuantumActivationClassifier, k: int = 2) -> list[LayerUnit]:
+    """Pick representative units per layer using outgoing weight norms."""
+    chosen: list[LayerUnit] = []
+    for layer_idx, layer_width in enumerate(model.hidden_layer_sizes):
+        if layer_idx < model.num_hidden_layers - 1:
+            outgoing = np.asarray(model.hidden_weights[layer_idx + 1], dtype=float)
+        else:
+            outgoing = np.asarray(model.W_out, dtype=float)
+        scores = np.linalg.norm(outgoing, axis=0)
+        order = np.argsort(scores)[::-1]
+        chosen.extend((layer_idx, int(unit_idx)) for unit_idx in order[: min(k, layer_width)])
+    return chosen
 
 
 def run_quantum_experiment(
@@ -154,7 +164,8 @@ def run_quantum_experiment(
     *,
     label: str,
     split: PreparedClassificationSplit,
-    hidden_units: int,
+    hidden_units: int = 6,
+    hidden_layers: tuple[int, ...] | None = None,
     n_qubits: int,
     steps: int,
     learning_rate: float,
@@ -170,6 +181,7 @@ def run_quantum_experiment(
     cfg = QuantumActivationConfig(
         input_dim=split.x_train.shape[1],
         hidden_units=hidden_units,
+        hidden_layers=hidden_layers,
         n_qubits=n_qubits,
         n_classes=len(split.target_names),
         mode=mode,
@@ -180,7 +192,11 @@ def run_quantum_experiment(
         batch_size=batch_size,
         show_training_progress=show_training_progress,
     )
-    snapshot_unit_count = min(3, hidden_units)
+    tracked_units = tuple(
+        (layer_idx, unit_idx)
+        for layer_idx, layer_width in enumerate(cfg.resolved_hidden_layers())
+        for unit_idx in range(min(3, layer_width))
+    )
     training_snapshots: list[TrainingSnapshot] = []
     training_curve_snapshots: list[CurveSnapshot] = []
     accuracy_history: list[AccuracySnapshot] = []
@@ -199,8 +215,8 @@ def run_quantum_experiment(
                 )
             )
             tracked_profiles = tuple(
-                np.asarray(model.get_activation_profile(unit_idx), dtype=float)
-                for unit_idx in range(snapshot_unit_count)
+                np.asarray(model.get_activation_profile(layer_idx, unit_idx), dtype=float)
+                for layer_idx, unit_idx in tracked_units
             )
             training_curve_snapshots.append(
                 CurveSnapshot(
@@ -220,8 +236,8 @@ def run_quantum_experiment(
     y_pred = np.asarray(model.predict(split.x_test), dtype=int)
     chosen_units = tuple(representative_units(model, k=2))
     measurements = tuple(
-        model.measure_activation_profile(unit_idx, shots=eval_shots)
-        for unit_idx in chosen_units
+        model.measure_activation_profile(layer_idx, unit_idx, shots=eval_shots)
+        for layer_idx, unit_idx in chosen_units
     )
     return QuantumExperimentResult(
         label=label,
@@ -243,6 +259,7 @@ def run_quantum_experiment(
             target_names=list(split.target_names),
             digits=3,
         ),
+        tracked_units=tracked_units,
         representative_units=chosen_units,
         measurements=measurements,
         eval_shots=eval_shots,
@@ -390,6 +407,7 @@ def plot_activation_evolution(
     model: QuantumActivationClassifier,
     training_curve_snapshots: tuple[CurveSnapshot, ...],
     *,
+    tracked_units: tuple[LayerUnit, ...],
     title_prefix: str,
 ) -> None:
     import matplotlib.pyplot as plt
@@ -398,7 +416,7 @@ def plot_activation_evolution(
         print("No activation curve snapshots recorded (rerun the training cell).")
         return
     x_grid = np.asarray(model.activation_grid, dtype=float)
-    n_units = len(training_curve_snapshots[0].profiles)
+    n_units = len(tracked_units)
     fig, axes = plt.subplots(
         n_units,
         1,
@@ -411,19 +429,20 @@ def plot_activation_evolution(
     steps = [snap.step for snap in training_curve_snapshots]
     smin, smax = min(steps), max(steps)
 
-    for unit_idx, ax in enumerate(axes):
+    for profile_idx, ax in enumerate(axes):
+        layer_idx, unit_idx = tracked_units[profile_idx]
         for snap in training_curve_snapshots:
             t = 0.0 if smax == smin else (snap.step - smin) / (smax - smin)
             ax.plot(
                 x_grid,
-                snap.profiles[unit_idx],
+                snap.profiles[profile_idx],
                 color=cmap(t),
                 alpha=0.85,
                 linewidth=1.2,
             )
         ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
-        ax.set_ylabel(f"unit {unit_idx}")
-        ax.set_title(f"{title_prefix}: hidden unit {unit_idx}")
+        ax.set_ylabel(f"L{layer_idx} U{unit_idx}")
+        ax.set_title(f"{title_prefix}: layer {layer_idx} unit {unit_idx}")
     axes[-1].set_xlabel("pre-activation z")
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=smin, vmax=smax))
     sm.set_array([])
@@ -438,30 +457,30 @@ def plot_final_activation_profiles(
 ) -> None:
     import matplotlib.pyplot as plt
 
-    n_units = model.hidden_units
-    ncols = 2
-    nrows = int(np.ceil(n_units / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(10, 2.8 * nrows), sharex=True)
-    axes = np.atleast_1d(axes).ravel()
     x_grid = np.asarray(model.activation_grid, dtype=float)
-    for unit_idx, ax in enumerate(axes):
-        if unit_idx >= n_units:
-            ax.axis("off")
-            continue
-        profile = model.get_activation_profile(unit_idx)
-        ax.plot(x_grid, profile, linewidth=2)
-        ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
-        ax.set_title(f"Hidden unit {unit_idx}")
-        ax.set_ylabel("activation")
-        ax.set_xlabel("pre-activation z")
-    fig.suptitle(title, y=1.02)
-    plt.tight_layout()
-    plt.show()
+    for layer_idx, layer_width in enumerate(model.hidden_layer_sizes):
+        ncols = 2
+        nrows = int(np.ceil(layer_width / ncols))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(10, 2.8 * nrows), sharex=True)
+        axes = np.atleast_1d(axes).ravel()
+        for unit_idx, ax in enumerate(axes):
+            if unit_idx >= layer_width:
+                ax.axis("off")
+                continue
+            profile = model.get_activation_profile(layer_idx, unit_idx)
+            ax.plot(x_grid, profile, linewidth=2)
+            ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
+            ax.set_title(f"Layer {layer_idx} unit {unit_idx}")
+            ax.set_ylabel("activation")
+            ax.set_xlabel("pre-activation z")
+        fig.suptitle(f"{title} (layer {layer_idx})", y=1.02)
+        plt.tight_layout()
+        plt.show()
 
 
 def plot_measurement_overlays(
     model: QuantumActivationClassifier,
-    unit_indices: tuple[int, ...] | list[int],
+    unit_indices: tuple[LayerUnit, ...] | list[LayerUnit],
     measurements: tuple[ActivationMeasurement, ...] | list[ActivationMeasurement],
     *,
     shots: int,
@@ -472,16 +491,17 @@ def plot_measurement_overlays(
     fig, axes = plt.subplots(len(unit_indices), 1, figsize=(7, 3 * len(unit_indices)), sharex=True)
     axes = np.atleast_1d(axes)
     x_grid = np.asarray(model.activation_grid, dtype=float)
-    for ax, unit_idx, measurement in zip(axes, unit_indices, measurements):
-        exact = model.get_activation_profile(unit_idx)
+    for ax, unit_ref, measurement in zip(axes, unit_indices, measurements):
+        layer_idx, unit_idx = unit_ref
+        exact = model.get_activation_profile(layer_idx, unit_idx)
         ax.plot(x_grid, exact, "k--", linewidth=2, label="exact activation")
         ax.plot(x_grid, measurement.profile, linewidth=1.6, label=f"measured ({shots} shots)")
         ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
-        ax.set_title(f"{title_prefix}: unit {unit_idx}")
+        ax.set_title(f"{title_prefix}: layer {layer_idx} unit {unit_idx}")
         ax.set_ylabel("activation")
         ax.legend(loc="best")
         print(
-            f"unit {unit_idx}: exact-vs-measured L1 = "
+            f"layer {layer_idx} unit {unit_idx}: exact-vs-measured L1 = "
             f"{np.sum(np.abs(exact - measurement.profile)):.6f}"
         )
         if measurement.p_pos is not None and measurement.p_neg is not None:
@@ -507,6 +527,7 @@ def plot_training_diagnostics(result: QuantumExperimentResult) -> None:
     plot_activation_evolution(
         result.model,
         result.training_curve_snapshots,
+        tracked_units=result.tracked_units,
         title_prefix=f"{result.label} activation evolution",
     )
 
@@ -535,4 +556,3 @@ def print_comparison_table(rows: list[tuple[str, float, float]]) -> None:
     print(f"{'-' * widths[0]}-+-{'-' * widths[1]}-+-{'-' * widths[2]}")
     for name, acc, macro_f1 in rows:
         print(f"{name:<{widths[0]}} | {acc:>{widths[1]}.4f} | {macro_f1:>{widths[2]}.4f}")
-

@@ -22,7 +22,7 @@ def test_default_baseline_suite_returns_finite_metrics_and_confusions(iris_split
 
 
 def test_representative_units_are_stable_for_same_seed():
-    cfg = QuantumActivationConfig(input_dim=4, hidden_units=4, n_qubits=3, seed=11)
+    cfg = QuantumActivationConfig(input_dim=4, hidden_layers=(4, 3), n_qubits=3, seed=11)
     model_a = QuantumActivationClassifier(cfg)
     model_b = QuantumActivationClassifier(cfg)
 
@@ -30,7 +30,8 @@ def test_representative_units_are_stable_for_same_seed():
     units_b = representative_units(model_b)
 
     assert units_a == units_b
-    assert all(0 <= idx < cfg.hidden_units for idx in units_a)
+    assert all(0 <= layer_idx < model_a.num_hidden_layers for layer_idx, _ in units_a)
+    assert all(0 <= unit_idx < model_a.hidden_layer_sizes[layer_idx] for layer_idx, unit_idx in units_a)
 
 
 def test_quantum_experiment_records_epoch_snapshots_and_every_five_curve_snapshots(iris_split):
@@ -38,7 +39,7 @@ def test_quantum_experiment_records_epoch_snapshots_and_every_five_curve_snapsho
         "standard",
         label="Standard test",
         split=iris_split,
-        hidden_units=4,
+        hidden_layers=(4, 3),
         n_qubits=3,
         steps=6,
         learning_rate=0.05,
@@ -54,6 +55,7 @@ def test_quantum_experiment_records_epoch_snapshots_and_every_five_curve_snapsho
     assert [snap.step for snap in result.training_curve_snapshots] == [-1, 0, 5]
     assert [snap.step for snap in result.accuracy_history] == [-1, 0, 5]
     assert result.confusion_matrix.shape == (3, 3)
+    assert all(len(snap.profiles) == len(result.tracked_units) for snap in result.training_curve_snapshots)
 
 
 def test_quantum_experiment_supports_all_modes(iris_split):
@@ -62,7 +64,7 @@ def test_quantum_experiment_supports_all_modes(iris_split):
             mode,
             label=f"{mode} test",
             split=iris_split,
-            hidden_units=4,
+            hidden_layers=(4, 3),
             n_qubits=3,
             steps=3,
             learning_rate=0.05,

@@ -91,87 +91,81 @@ def _interp_hidden(z_bh: Any, profiles_hg: Any, x_grid: Any) -> Any:
     return jax.vmap(col_interp, in_axes=(1, 0), out_axes=1)(z_bh, profiles_hg)
 
 
-def _forward_standard(
-    params: tuple[Any, ...],
-    x: Any,
-    num_grid_points: int,
-    x_grid: Any,
-    eps: float,
-) -> Any:
-    w_in, b_in, w_out, b_out, raw_profiles = params
-    z = jnp.tanh(x @ w_in.T + b_in)
-    prof = _profiles_standard(raw_profiles, num_grid_points, eps)
-    hidden = _interp_hidden(z, prof, x_grid)
-    return hidden @ w_out.T + b_out
-
-
-def _forward_mode_a(
-    params: tuple[Any, ...],
-    x: Any,
-    num_grid_points: int,
-    x_grid: Any,
-    eps: float,
-) -> Any:
-    w_in, b_in, w_out, b_out, raw_profiles = params
-    z = jnp.tanh(x @ w_in.T + b_in)
-    prof = _profiles_mode_a(raw_profiles, num_grid_points, eps)
-    hidden = _interp_hidden(z, prof, x_grid)
-    return hidden @ w_out.T + b_out
-
-
-def _forward_mode_b(
-    params: tuple[Any, ...],
-    x: Any,
-    num_grid_points: int,
-    x_grid: Any,
-    eps: float,
-) -> Any:
-    w_in, b_in, w_out, b_out, raw_plus, raw_minus, raw_logits = params
-    z = jnp.tanh(x @ w_in.T + b_in)
-    prof = _profiles_mode_b(raw_plus, raw_minus, raw_logits, num_grid_points, eps)
-    hidden = _interp_hidden(z, prof, x_grid)
-    return hidden @ w_out.T + b_out
-
-
-def _make_forward(mode: str):
+def _layer_profiles(mode: str, params: tuple[Any, ...], layer_idx: int, num_grid_points: int, eps: float) -> Any:
     if mode == "standard":
-        return _forward_standard
+        raw_profiles = params[4]
+        return _profiles_standard(raw_profiles[layer_idx], num_grid_points, eps)
     if mode == "mode_a":
-        return _forward_mode_a
-    if mode == "mode_b":
-        return _forward_mode_b
-    raise ValueError(f"Unknown mode {mode!r}")
+        raw_profiles = params[4]
+        return _profiles_mode_a(raw_profiles[layer_idx], num_grid_points, eps)
+    raw_plus, raw_minus, raw_logits = params[4:7]
+    return _profiles_mode_b(raw_plus[layer_idx], raw_minus[layer_idx], raw_logits[layer_idx], num_grid_points, eps)
+
+
+def _forward(
+    params: tuple[Any, ...],
+    x: Any,
+    mode: str,
+    num_grid_points: int,
+    x_grid: Any,
+    eps: float,
+) -> Any:
+    hidden_weights, hidden_biases, w_out, b_out = params[:4]
+    hidden = x
+    for layer_idx, (weights, biases) in enumerate(zip(hidden_weights, hidden_biases)):
+        z = hidden @ weights.T + biases
+        profiles = _layer_profiles(mode, params, layer_idx, num_grid_points, eps)
+        hidden = _interp_hidden(z, profiles, x_grid)
+    return hidden @ w_out.T + b_out
 
 
 def _init_params(key: Any, config: QuantumActivationConfig) -> tuple[Any, ...]:
-    H = config.hidden_units
-    D = config.input_dim
-    C = config.n_classes
-    G = 2**config.n_qubits
-    keys = jax.random.split(key, 32)
-    k = 0
+    hidden_layers = config.resolved_hidden_layers()
+    hidden_weights: list[Any] = []
+    hidden_biases: list[Any] = []
+    raw_profiles: list[Any] = []
+    raw_plus: list[Any] = []
+    raw_minus: list[Any] = []
+    raw_logits: list[Any] = []
 
-    def ksplit(n: int = 1):
-        nonlocal k
-        out = keys[k : k + n]
-        k += n
-        return out[0] if n == 1 else out
+    prev_dim = config.input_dim
+    key_count = max(4 * len(hidden_layers) + 4, 8)
+    keys = list(jax.random.split(key, key_count))
+    key_idx = 0
 
-    w_in = jax.random.normal(ksplit(), (H, D)) * 0.35
-    b_in = jax.random.normal(ksplit(), (H,)) * 0.05
-    w_out = jax.random.normal(ksplit(), (C, H)) * 0.35
-    b_out = jnp.zeros((C,), dtype=jnp.float64)
+    def take_key() -> Any:
+        nonlocal key_idx
+        result = keys[key_idx]
+        key_idx += 1
+        return result
 
-    if config.mode == "standard":
-        raw = jax.random.normal(ksplit(), (H, G)) * 0.25
-        return (w_in, b_in, w_out, b_out, raw)
-    if config.mode == "mode_a":
-        raw = jax.random.normal(ksplit(), (H, 2 * G)) * 0.25
-        return (w_in, b_in, w_out, b_out, raw)
-    raw_plus = jax.random.normal(ksplit(), (H, G)) * 0.25
-    raw_minus = jax.random.normal(ksplit(), (H, G)) * 0.25
-    raw_logits = jax.random.normal(ksplit(), (H, 2)) * 0.05
-    return (w_in, b_in, w_out, b_out, raw_plus, raw_minus, raw_logits)
+    for width in hidden_layers:
+        hidden_weights.append(jax.random.normal(take_key(), (width, prev_dim)) * 0.35)
+        hidden_biases.append(jax.random.normal(take_key(), (width,)) * 0.05)
+        if config.mode == "standard":
+            raw_profiles.append(jax.random.normal(take_key(), (width, 2**config.n_qubits)) * 0.25)
+        elif config.mode == "mode_a":
+            raw_profiles.append(jax.random.normal(take_key(), (width, 2 * (2**config.n_qubits))) * 0.25)
+        else:
+            raw_plus.append(jax.random.normal(take_key(), (width, 2**config.n_qubits)) * 0.25)
+            raw_minus.append(jax.random.normal(take_key(), (width, 2**config.n_qubits)) * 0.25)
+            raw_logits.append(jax.random.normal(take_key(), (width, 2)) * 0.05)
+        prev_dim = width
+
+    w_out = jax.random.normal(take_key(), (config.n_classes, hidden_layers[-1])) * 0.35
+    b_out = jnp.zeros((config.n_classes,), dtype=jnp.float64)
+
+    if config.mode in {"standard", "mode_a"}:
+        return (tuple(hidden_weights), tuple(hidden_biases), w_out, b_out, tuple(raw_profiles))
+    return (
+        tuple(hidden_weights),
+        tuple(hidden_biases),
+        w_out,
+        b_out,
+        tuple(raw_plus),
+        tuple(raw_minus),
+        tuple(raw_logits),
+    )
 
 
 def _params_to_model(
@@ -181,20 +175,28 @@ def _params_to_model(
     """Copy trained JAX parameters (as numpy) into a PennyLane model."""
     import pennylane.numpy as pnp
 
-    w_in, b_in, w_out, b_out = (np.asarray(x, dtype=float) for x in params[:4])
-    model.W_in = pnp.array(w_in, requires_grad=True)
-    model.b_in = pnp.array(b_in, requires_grad=True)
-    model.W_out = pnp.array(w_out, requires_grad=True)
-    model.b_out = pnp.array(b_out, requires_grad=True)
+    hidden_weights = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[0]]
+    hidden_biases = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[1]]
+    w_out = pnp.array(np.asarray(params[2], dtype=float), requires_grad=True)
+    b_out = pnp.array(np.asarray(params[3], dtype=float), requires_grad=True)
 
     if model.mode in {"standard", "mode_a"}:
-        rp = np.asarray(params[4], dtype=float)
-        model.raw_profiles = pnp.array(rp, requires_grad=True)
+        raw_profiles = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[4]]
+        model.set_parameters(*hidden_weights, *hidden_biases, w_out, b_out, *raw_profiles)
         return
-    rp, rm, rl = (np.asarray(x, dtype=float) for x in params[4:7])
-    model.raw_plus = pnp.array(rp, requires_grad=True)
-    model.raw_minus = pnp.array(rm, requires_grad=True)
-    model.raw_channel_logits = pnp.array(rl, requires_grad=True)
+
+    raw_plus = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[4]]
+    raw_minus = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[5]]
+    raw_logits = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[6]]
+    model.set_parameters(
+        *hidden_weights,
+        *hidden_biases,
+        w_out,
+        b_out,
+        *raw_plus,
+        *raw_minus,
+        *raw_logits,
+    )
 
 
 def train_quantum_activation_classifier_jax(
@@ -219,14 +221,13 @@ def train_quantum_activation_classifier_jax(
 
     num_grid_points = 2**config.n_qubits
     x_grid = jnp.linspace(-1.0, 1.0, num_grid_points)
-    forward = _make_forward(config.mode)
 
     key = jax.random.PRNGKey(config.seed)
     key, k_init = jax.random.split(key)
     params = _init_params(k_init, config)
 
     def loss_batch(p: Any, xb: Any, yb: Any) -> Any:
-        logits = forward(p, xb, num_grid_points, x_grid, EPS)
+        logits = _forward(p, xb, config.mode, num_grid_points, x_grid, EPS)
         logp = logits - jax.nn.logsumexp(logits, axis=1, keepdims=True)
         return -jnp.mean(jnp.sum(yb * logp, axis=1))
 
