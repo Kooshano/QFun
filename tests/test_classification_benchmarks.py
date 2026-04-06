@@ -106,3 +106,25 @@ def test_quantum_experiment_supports_hybrid_family(iris_split):
         assert len(result.measurements) == len(result.representative_units)
         assert len(result.representative_components) == len(result.representative_units)
         assert all(np.all(np.isfinite(component.combined)) for component in result.representative_components)
+
+
+def test_quantum_experiment_can_skip_diagnostics_for_batch_runs(iris_split):
+    result = run_quantum_experiment(
+        "standard",
+        label="Standard batch test",
+        split=iris_split,
+        hidden_units=4,
+        n_qubits=3,
+        steps=2,
+        learning_rate=0.05,
+        seed=7,
+        log_every=None,
+        snapshot_interval=5,
+        eval_shots=100,
+        collect_diagnostics=False,
+    )
+
+    assert np.isfinite(result.test_accuracy)
+    assert result.representative_units == ()
+    assert result.representative_components == ()
+    assert result.measurements == ()

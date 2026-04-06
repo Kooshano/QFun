@@ -210,6 +210,7 @@ def run_quantum_experiment(
     hidden_base_activation: str = "silu",
     profile_smoothness_reg: float = 0.0,
     profile_interp: str = "linear",
+    collect_diagnostics: bool = True,
 ) -> QuantumExperimentResult:
     """Train one quantum-activation classifier and collect notebook-facing diagnostics."""
     cfg = QuantumActivationConfig(
@@ -273,15 +274,20 @@ def run_quantum_experiment(
         log_every=log_every,
     )
     y_pred = np.asarray(model.predict(split.x_test), dtype=int)
-    chosen_units = tuple(representative_units(model, k=2))
-    representative_components = tuple(
-        model.get_activation_components(layer_idx, unit_idx)
-        for layer_idx, unit_idx in chosen_units
-    )
-    measurements = tuple(
-        model.measure_activation_profile(layer_idx, unit_idx, shots=eval_shots)
-        for layer_idx, unit_idx in chosen_units
-    )
+    if collect_diagnostics:
+        chosen_units = tuple(representative_units(model, k=2))
+        representative_components = tuple(
+            model.get_activation_components(layer_idx, unit_idx)
+            for layer_idx, unit_idx in chosen_units
+        )
+        measurements = tuple(
+            model.measure_activation_profile(layer_idx, unit_idx, shots=eval_shots)
+            for layer_idx, unit_idx in chosen_units
+        )
+    else:
+        chosen_units = ()
+        representative_components = ()
+        measurements = ()
     return QuantumExperimentResult(
         label=label,
         mode=mode,

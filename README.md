@@ -98,6 +98,7 @@ The MNIST-scale research scripts live in [experiments](experiments):
 - [run_mnist_spline.py](experiments/run_mnist_spline.py)
 - [run_mnist_deep.py](experiments/run_mnist_deep.py)
 - [run_mnist_kan_ablation.py](experiments/run_mnist_kan_ablation.py)
+- [run_mnist_multiseed_ablation.py](experiments/run_mnist_multiseed_ablation.py)
 
 Run artifacts are written under `notebooks/note*_outputs/<run_id>/` and are gitignored.
 
@@ -108,6 +109,7 @@ Long-form architecture references live in [docs](docs):
 - [architecture_single_layer.md](docs/architecture_single_layer.md)
 - [architecture_deep.md](docs/architecture_deep.md)
 - [architecture_kan_hybrid.md](docs/architecture_kan_hybrid.md)
+- [paper_roadmap.md](docs/paper_roadmap.md)
 
 ## Public API
 
