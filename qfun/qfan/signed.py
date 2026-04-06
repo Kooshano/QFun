@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..encode import decompose_signed_distribution
+
 
 def mode_a_signed_encode(f_vals: np.ndarray, eps: float = 1e-12) -> tuple[np.ndarray, np.ndarray]:
     """Encode a signed discrete profile as normalized amplitudes plus per-bin sign bits (Mode A)."""
@@ -28,15 +30,8 @@ def mode_b_signed_decompose(f_vals: np.ndarray) -> tuple[np.ndarray, np.ndarray,
     Returns ``(p_plus, p_minus, z_plus, z_minus)`` such that the signed profile
     can be reconstructed as ``z_plus * p_plus - z_minus * p_minus``.
     """
-
-    f = np.asarray(f_vals, dtype=float)
-    f_plus = np.clip(f, 0.0, None)
-    f_minus = np.clip(-f, 0.0, None)
-    z_plus = float(np.sum(f_plus))
-    z_minus = float(np.sum(f_minus))
-    p_plus = f_plus / z_plus if z_plus > 0.0 else np.zeros_like(f)
-    p_minus = f_minus / z_minus if z_minus > 0.0 else np.zeros_like(f)
-    return p_plus, p_minus, z_plus, z_minus
+    dec = decompose_signed_distribution(np.asarray(f_vals, dtype=float))
+    return dec.p_plus, dec.p_minus, dec.z_plus, dec.z_minus
 
 
 def reconstruct_mode_b_signed(

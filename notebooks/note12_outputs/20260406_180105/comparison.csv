@@ -1,7 +1,0 @@
-label,hidden_function_family,mode,train_accuracy,test_accuracy,macro_f1,profile_smoothness_reg
-MNIST quantum-KAN hybrid Mode A,kan_quantum_hybrid,mode_a,0.8783214285714286,0.8747142857142857,0.8724979799722954,0.001
-MNIST quantum-KAN hybrid Mode B,kan_quantum_hybrid,mode_b,0.8795,0.8732857142857143,0.8709522208211828,0.001
-MNIST quantum-KAN hybrid standard,kan_quantum_hybrid,standard,0.8764642857142857,0.8692142857142857,0.867166770170091,0.001
-MNIST pure-superposition Mode A,pure_superposition,mode_a,0.82525,0.8187142857142857,0.8152372636110845,0.0
-MNIST pure-superposition Mode B,pure_superposition,mode_b,0.7099107142857143,0.7052142857142857,0.6941909551794601,0.0
-MNIST pure-superposition standard,pure_superposition,standard,0.6570535714285715,0.6531428571428571,0.636919950980244,0.0

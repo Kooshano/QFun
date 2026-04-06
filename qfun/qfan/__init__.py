@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 from .benchmark import run_feynman_benchmark
 from .config import BenchmarkConfig, QFANConfig
 from .feynman import FeynmanBatch, FeynmanQFANResult, sample_equation, train_feynman_equation
@@ -27,7 +25,6 @@ __all__ = [
     "FeynmanQFANResult",
     "QFANBlock",
     "QFANConfig",
-    "QKANBlock",
     "QuantumActivationClassifier",
     "QuantumActivationConfig",
     "mode_a_signed_encode",
@@ -40,17 +37,3 @@ __all__ = [
     "train_feynman_equation",
     "train_qfan",
 ]
-
-
-def __getattr__(name: str):
-    if name == "QKANBlock":
-        warnings.warn(
-            (
-                "QKANBlock is deprecated and will be removed in a future release; "
-                "use QFANBlock instead."
-            ),
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return QFANBlock
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

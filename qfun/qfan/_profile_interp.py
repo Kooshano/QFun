@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
+import pennylane.numpy as pnp
 
 from .._utils import EPS
 
@@ -36,6 +37,25 @@ def _interp_linear_np(z: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, eps
     y0 = y_grid[idx0]
     y1 = y_grid[idx1]
     denom = np.where(np.abs(x1 - x0) < eps, 1.0, x1 - x0)
+    t = (z - x0) / denom
+    return (1.0 - t) * y0 + t * y1
+
+
+def interp_linear_pnp(z: Any, x_grid: Any, y_grid: Any, eps: float = EPS) -> Any:
+    """PennyLane/Autograd-friendly linear interpolation on a uniform grid."""
+    z = pnp.clip(z, x_grid[0], x_grid[-1])
+    dx = x_grid[1] - x_grid[0]
+    idx_float = (z - x_grid[0]) / dx
+    idx0 = pnp.floor(idx_float)
+    idx0 = pnp.clip(idx0, 0, y_grid.shape[0] - 1)
+    idx1 = pnp.clip(idx0 + 1, 0, y_grid.shape[0] - 1)
+    i0 = idx0.astype(int)
+    i1 = idx1.astype(int)
+    x0 = x_grid[i0]
+    x1 = x_grid[i1]
+    y0 = y_grid[i0]
+    y1 = y_grid[i1]
+    denom = pnp.where(pnp.abs(x1 - x0) < eps, 1.0, x1 - x0)
     t = (z - x0) / denom
     return (1.0 - t) * y0 + t * y1
 

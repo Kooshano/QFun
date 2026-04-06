@@ -11,7 +11,7 @@ import pennylane as qml
 import pennylane.numpy as pnp
 
 from .._utils import EPS, _to_numpy_float
-from ._profile_interp import PROFILE_INTERP_MODES, _open_uniform_knots, interp_profile_np
+from ._profile_interp import PROFILE_INTERP_MODES, _open_uniform_knots, interp_linear_pnp, interp_profile_np
 from ..quantum_learning import (
     measure_mode_a_superposition,
     measure_mode_b_superposition,
@@ -27,17 +27,12 @@ def _softmax_np(logits: np.ndarray) -> np.ndarray:
     return exp_shifted / np.sum(exp_shifted, axis=1, keepdims=True)
 
 
-def _softmax2_np(raw: np.ndarray) -> np.ndarray:
-    """Two-class softmax (Mode B channel weights), NumPy only."""
-    raw = np.asarray(raw, dtype=float)
-    shifted = raw - np.max(raw)
-    exp_shifted = np.exp(shifted)
-    return exp_shifted / np.sum(exp_shifted)
+def _normalized_amplitudes_np(raw: np.ndarray) -> np.ndarray:
+    return np.asarray(_to_numpy_float(normalize_real_amplitudes(raw)), dtype=float)
 
 
-def _norm_amp_np(raw: np.ndarray, eps: float = EPS) -> np.ndarray:
-    raw = np.asarray(raw, dtype=float)
-    return raw / np.sqrt(np.sum(raw**2) + eps)
+def _softmax_weights_np(raw: np.ndarray) -> np.ndarray:
+    return np.asarray(_to_numpy_float(softmax_weights(raw)), dtype=float)
 
 
 def _silu_np(x: np.ndarray) -> np.ndarray:
@@ -45,30 +40,12 @@ def _silu_np(x: np.ndarray) -> np.ndarray:
     return x / (1.0 + np.exp(-x))
 
 
-def _interp_linear_pnp(z: Any, x_grid: Any, y_grid: Any, eps: float) -> Any:
-    z = pnp.clip(z, x_grid[0], x_grid[-1])
-    dx = x_grid[1] - x_grid[0]
-    idx_float = (z - x_grid[0]) / dx
-    idx0 = pnp.floor(idx_float)
-    idx0 = pnp.clip(idx0, 0, y_grid.shape[0] - 1)
-    idx1 = pnp.clip(idx0 + 1, 0, y_grid.shape[0] - 1)
-    i0 = idx0.astype(int)
-    i1 = idx1.astype(int)
-    x0 = x_grid[i0]
-    x1 = x_grid[i1]
-    y0 = y_grid[i0]
-    y1 = y_grid[i1]
-    denom = pnp.where(pnp.abs(x1 - x0) < eps, 1.0, x1 - x0)
-    t = (z - x0) / denom
-    return (1.0 - t) * y0 + t * y1
-
-
 def _interp_natural_cubic_pnp(z: Any, x_grid: Any, y_grid: Any, eps: float) -> Any:
     yv = pnp.asarray(y_grid, dtype=float)
     n = yv.shape[0]
     h = x_grid[1] - x_grid[0]
     if n < 4:
-        return _interp_linear_pnp(z, x_grid, yv, eps)
+        return interp_linear_pnp(z, x_grid, yv, eps)
     m = n - 2
     inv_h2 = 6.0 / (h * h)
     rhs = inv_h2 * (yv[:-2] - 2.0 * yv[1:-1] + yv[2:])
@@ -464,7 +441,7 @@ class QuantumActivationClassifier:
     def _interp_value(self, y_grid: Any, z: Any) -> Any:
         yv = pnp.asarray(y_grid, dtype=float)
         if self.profile_interp == "linear":
-            return _interp_linear_pnp(z, self.activation_grid, yv, EPS)
+            return interp_linear_pnp(z, self.activation_grid, yv, EPS)
         if self.profile_interp == "cubic_natural":
             return _interp_natural_cubic_pnp(z, self.activation_grid, yv, EPS)
         return _interp_bspline_pnp(z, self._bspline_knots_np, yv, EPS)
@@ -508,21 +485,16 @@ class QuantumActivationClassifier:
         self._validate_layer_unit_idx(layer_idx, unit_idx)
         g = float(self.num_grid_points)
         if self.mode == "standard":
-            raw = np.asarray(self.raw_profiles_layers[layer_idx][unit_idx], dtype=float)
-            amps = _norm_amp_np(raw)
+            amps = _normalized_amplitudes_np(self.raw_profiles_layers[layer_idx][unit_idx])
             return g * (amps**2)
         if self.mode == "mode_a":
-            raw = np.asarray(self.raw_profiles_layers[layer_idx][unit_idx], dtype=float)
-            amps = _norm_amp_np(raw)
+            amps = _normalized_amplitudes_np(self.raw_profiles_layers[layer_idx][unit_idx])
             fp = amps**2
             q = fp[0::2] - fp[1::2]
             return g * q
-        rp = np.asarray(self.raw_plus_layers[layer_idx][unit_idx], dtype=float)
-        rm = np.asarray(self.raw_minus_layers[layer_idx][unit_idx], dtype=float)
-        lg = np.asarray(self.raw_channel_logits_layers[layer_idx][unit_idx], dtype=float)
-        pp = _norm_amp_np(rp) ** 2
-        pm = _norm_amp_np(rm) ** 2
-        z = _softmax2_np(lg)
+        pp = _normalized_amplitudes_np(self.raw_plus_layers[layer_idx][unit_idx]) ** 2
+        pm = _normalized_amplitudes_np(self.raw_minus_layers[layer_idx][unit_idx]) ** 2
+        z = _softmax_weights_np(self.raw_channel_logits_layers[layer_idx][unit_idx])
         return g * (z[0] * pp - z[1] * pm)
 
     def _activation_components_np(self, layer_idx: int, unit_idx: int) -> ActivationComponents:

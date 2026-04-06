@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import pennylane.numpy as pnp
 
+from .._utils import EPS
+from ._profile_interp import interp_linear_pnp
 from .encoding import create_grid
 
 
@@ -51,21 +53,7 @@ class QFANBlock:
 
     def _interp_value(self, y_grid: Any, x: Any) -> Any:
         """Linear interpolation of ``y_grid`` on ``self.x_grid`` at scalar ``x``."""
-        x = pnp.clip(x, self.x_grid[0], self.x_grid[-1])
-        dx = self.x_grid[1] - self.x_grid[0]
-        idx_float = (x - self.x_grid[0]) / dx
-        idx0 = pnp.floor(idx_float)
-        idx0 = pnp.clip(idx0, 0, self.num_grid_points - 1)
-        idx1 = pnp.clip(idx0 + 1, 0, self.num_grid_points - 1)
-        i0 = idx0.astype(int)
-        i1 = idx1.astype(int)
-        x0 = self.x_grid[i0]
-        x1 = self.x_grid[i1]
-        y0 = y_grid[i0]
-        y1 = y_grid[i1]
-        denom = pnp.where(pnp.abs(x1 - x0) < 1e-12, 1.0, x1 - x0)
-        t = (x - x0) / denom
-        return (1.0 - t) * y0 + t * y1
+        return interp_linear_pnp(x, self.x_grid, y_grid, EPS)
 
     def forward(self, x: Any) -> Any:
         """Scalar (or length-1) prediction: sum_m c_m * phi_m(z_m(x))."""

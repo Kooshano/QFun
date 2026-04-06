@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..encode import grid_x
+
 
 def normalize_from_domain(values: np.ndarray, lo: float, hi: float) -> np.ndarray:
     """Map values from [lo, hi] to [-1, 1]."""
@@ -15,4 +17,4 @@ def normalize_from_domain(values: np.ndarray, lo: float, hi: float) -> np.ndarra
 
 def create_grid(n_qubits: int, lo: float = -1.0, hi: float = 1.0) -> np.ndarray:
     """Uniform 1D grid with ``2**n_qubits`` points on ``[lo, hi]``."""
-    return np.linspace(lo, hi, 2**n_qubits, dtype=float)
+    return np.asarray(grid_x(lo, hi, n_qubits), dtype=float)

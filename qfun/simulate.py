@@ -18,7 +18,7 @@ from ._utils import _samples_to_counts
 # ── standard (nonneg) API ──────────────────────────────────────────────────
 
 def build_circuit(amplitudes: np.ndarray, n_qubits: int) -> qml.QNode:
-    """Return a QNode that prepares *amplitudes* and measures in the computational basis.
+    """Legacy helper that prepares *amplitudes* and samples in the computational basis.
 
     For most use cases prefer :func:`run_shots`, which runs the same preparation with
     configurable shot counts. This helper is kept for advanced / custom workflows.

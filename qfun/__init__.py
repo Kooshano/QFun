@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 from . import datasets, feynman_dataset, qfan
 from .datasets import (
     ClassificationDataset,
@@ -54,7 +52,6 @@ __all__ = [
     "PreparedClassificationSplit",
     "QFANBlock",
     "QFANConfig",
-    "QKANBlock",
     "QuantumActivationClassifier",
     "QuantumActivationConfig",
     "SignedAmplitudes",
@@ -86,17 +83,3 @@ __all__ = [
     "train_qfan",
     "train_quantum_activation_classifier",
 ]
-
-
-def __getattr__(name: str):
-    if name == "QKANBlock":
-        warnings.warn(
-            (
-                "QKANBlock is deprecated and will be removed in a future release; "
-                "use QFANBlock instead."
-            ),
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return QFANBlock
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
