@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.model_selection import train_test_split
 
+import qfun.datasets as datasets_module
 from qfun.datasets import load_classification_dataset, prepare_classification_split
 
 
@@ -86,3 +87,29 @@ def test_pca_path_returns_requested_dimension_and_feature_names():
     assert split.x_test.shape[1] == 16
     assert split.pca is not None
     assert split.feature_names == tuple(f"pc{idx}" for idx in range(16))
+
+
+def test_mnist_loader_coerces_targets_and_uses_openml(monkeypatch):
+    class FakeBunch:
+        data = np.zeros((12, 784), dtype=float)
+        target = np.array([str(idx % 10) for idx in range(12)], dtype=object)
+        feature_names = [f"pixel_{idx}" for idx in range(784)]
+        target_names = ["class"]
+
+    calls = []
+
+    def fake_fetch_openml(name, *, version, as_frame):
+        calls.append((name, version, as_frame))
+        return FakeBunch()
+
+    monkeypatch.setattr(datasets_module, "fetch_openml", fake_fetch_openml)
+
+    dataset = load_classification_dataset("mnist")
+
+    assert calls == [("mnist_784", 1, False)]
+    assert dataset.X.shape == (12, 784)
+    assert dataset.y.dtype.kind in {"i", "u"}
+    assert np.array_equal(dataset.y[:10], np.arange(10))
+    assert len(dataset.feature_names) == 784
+    assert dataset.feature_names[0] == "pixel_0"
+    assert dataset.target_names == tuple(str(idx) for idx in range(10))

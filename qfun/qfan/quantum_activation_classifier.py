@@ -36,6 +36,10 @@ class QuantumActivationConfig:
     learning_rate: float = 0.05
     steps: int = 120
     seed: int = 42
+    #: If ``True``, train with JAX + Optax (install ``qfun[gpu]`` or ``jax`` + ``optax``).
+    #: Uses minibatches of ``batch_size``; good for large datasets and optional GPU.
+    use_jax: bool = False
+    batch_size: int = 512
 
 
 @dataclass(frozen=True)
@@ -269,7 +273,28 @@ def train_quantum_activation_classifier(
     after_step: Callable[[int, float, QuantumActivationClassifier], None] | None = None,
     log_every: int | None = None,
 ) -> tuple[QuantumActivationClassifier, np.ndarray]:
-    """Train a multiclass classifier with learned superposition activations."""
+    """Train a multiclass classifier with learned superposition activations.
+
+    Set ``config.use_jax=True`` for JAX/Optax training (CPU or GPU if a CUDA jaxlib
+    is installed). The trained weights are copied back into the same PennyLane-based
+    model so ``measure_activation_profile`` and other diagnostics keep working.
+    """
+    if config.use_jax:
+        from ._jax_quantum_activation import jax_ready, train_quantum_activation_classifier_jax
+
+        if not jax_ready():
+            raise ImportError(
+                "config.use_jax=True requires JAX and Optax. "
+                'Install with: pip install "qfun[gpu]" or pip install jax optax.'
+            )
+        return train_quantum_activation_classifier_jax(
+            x_train,
+            y_train,
+            config,
+            after_step=after_step,
+            log_every=log_every,
+        )
+
     x = np.asarray(x_train, dtype=float)
     y = np.asarray(y_train, dtype=int)
     if x.ndim != 2:

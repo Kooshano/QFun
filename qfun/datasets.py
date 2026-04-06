@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from sklearn.datasets import (
+    fetch_openml,
     load_breast_cancer,
     load_digits,
     load_iris,
@@ -48,10 +49,13 @@ def _coerce_feature_names(raw_names, n_features: int) -> tuple[str, ...]:
 
 
 def _coerce_target_names(raw_names, y: np.ndarray) -> tuple[str, ...]:
-    if raw_names is None:
-        classes = np.unique(y)
-        return tuple(str(cls) for cls in classes)
-    return tuple(str(name) for name in raw_names)
+    classes = tuple(str(cls) for cls in np.unique(y))
+    if raw_names is None or np.isscalar(raw_names):
+        return classes
+    names = tuple(str(name) for name in raw_names)
+    if len(names) != len(classes):
+        return classes
+    return names
 
 
 def _dataset_from_bunch(name: str, bunch) -> ClassificationDataset:
@@ -68,16 +72,27 @@ def _dataset_from_bunch(name: str, bunch) -> ClassificationDataset:
     )
 
 
+def _load_mnist() -> ClassificationDataset:
+    """Load MNIST via sklearn/OpenML; sklearn caches the download after the first fetch."""
+    bunch = fetch_openml("mnist_784", version=1, as_frame=False)
+    return _dataset_from_bunch("mnist", bunch)
+
+
 _DATASET_LOADERS: dict[str, Callable[[], ClassificationDataset]] = {
     "iris": lambda: _dataset_from_bunch("iris", load_iris()),
     "wine": lambda: _dataset_from_bunch("wine", load_wine()),
     "breast_cancer": lambda: _dataset_from_bunch("breast_cancer", load_breast_cancer()),
     "digits": lambda: _dataset_from_bunch("digits", load_digits()),
+    "mnist": _load_mnist,
 }
 
 
 def load_classification_dataset(name: str) -> ClassificationDataset:
-    """Load one of the built-in offline sklearn classification datasets."""
+    """Load one of the supported sklearn classification datasets.
+
+    The tabular datasets and Digits are bundled with sklearn. ``"mnist"`` is fetched
+    once from OpenML via sklearn and then cached locally by sklearn for reuse.
+    """
     key = str(name).strip().lower()
     if key not in _DATASET_LOADERS:
         supported = ", ".join(sorted(_DATASET_LOADERS))

@@ -123,6 +123,8 @@ The maintained notebooks live in [notebooks](notebooks):
    Run the superposition-activation classifier on PCA-compressed Digits.
 9. [09_qfun_superposition_activation_ablation.ipynb](notebooks/09_qfun_superposition_activation_ablation.ipynb)  
    Paper-style ablations over mode choice, qubit count, hidden width, and measurement sensitivity.
+10. [10_qfun_superposition_activations_mnist.ipynb](notebooks/10_qfun_superposition_activations_mnist.ipynb)  
+   Continue the digits benchmark on PCA-compressed MNIST, using a reproducible stratified subset to keep notebook runtime practical.
 
 If you installed the dev extras, open them with Jupyter:
 

@@ -162,6 +162,8 @@ def run_quantum_experiment(
     log_every: int | None,
     snapshot_interval: int,
     eval_shots: int,
+    use_jax: bool = False,
+    batch_size: int = 512,
 ) -> QuantumExperimentResult:
     """Train one quantum-activation classifier and collect notebook-facing diagnostics."""
     cfg = QuantumActivationConfig(
@@ -173,6 +175,8 @@ def run_quantum_experiment(
         learning_rate=learning_rate,
         steps=steps,
         seed=seed,
+        use_jax=use_jax,
+        batch_size=batch_size,
     )
     snapshot_unit_count = min(3, hidden_units)
     training_snapshots: list[TrainingSnapshot] = []
@@ -393,7 +397,13 @@ def plot_activation_evolution(
         return
     x_grid = np.asarray(model.activation_grid, dtype=float)
     n_units = len(training_curve_snapshots[0].profiles)
-    fig, axes = plt.subplots(n_units, 1, figsize=(7, 2.5 * n_units), sharex=True)
+    fig, axes = plt.subplots(
+        n_units,
+        1,
+        figsize=(7, 2.5 * n_units),
+        sharex=True,
+        constrained_layout=True,
+    )
     axes = np.atleast_1d(axes)
     cmap = plt.cm.viridis
     steps = [snap.step for snap in training_curve_snapshots]
@@ -416,7 +426,6 @@ def plot_activation_evolution(
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=smin, vmax=smax))
     sm.set_array([])
     fig.colorbar(sm, ax=axes, label="training step (snapshot)")
-    plt.tight_layout()
     plt.show()
 
 

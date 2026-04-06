@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from qfun.qfan.quantum_activation_classifier import (
     QuantumActivationClassifier,
@@ -103,3 +104,26 @@ def test_after_step_records_initial_snapshot_and_every_epoch(iris_split_arrays):
     assert seen_steps[-1] == 5
     assert len(seen_steps) == 7
     assert all(profile.shape == (8,) for profile in unit0_profiles)
+
+
+def test_jax_training_supported_for_each_mode(iris_split_arrays):
+    pytest.importorskip("jax")
+    pytest.importorskip("optax")
+    x_train, x_test, y_train, y_test = iris_split_arrays
+
+    for mode in ("standard", "mode_a", "mode_b"):
+        cfg = QuantumActivationConfig(
+            input_dim=4,
+            hidden_units=3,
+            n_qubits=3,
+            n_classes=3,
+            mode=mode,
+            steps=2,
+            seed=3,
+            use_jax=True,
+            batch_size=32,
+        )
+        model, losses = train_quantum_activation_classifier(x_train, y_train, cfg)
+        assert len(losses) == 2
+        assert losses[-1] < float("inf")
+        assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0
