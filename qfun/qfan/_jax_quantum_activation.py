@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from .._utils import EPS
+from ._profile_interp import _open_uniform_knots
 
 if TYPE_CHECKING:
     from .quantum_activation_classifier import QuantumActivationClassifier, QuantumActivationConfig
@@ -86,13 +87,90 @@ def _silu(x: Any) -> Any:
     return x * jax.nn.sigmoid(x)
 
 
-def _interp_hidden(z_bh: Any, profiles_hg: Any, x_grid: Any) -> Any:
-    """Linear interp: z (B,H), profiles (H,G), x_grid (G,) -> hidden (B,H)."""
+def _natural_cubic_M_jax(y: Any, h: Any) -> Any:
+    n = y.shape[0]
+    m = n - 2
+    inv_h2 = 6.0 / (h * h)
+    rhs = inv_h2 * (y[:-2] - 2.0 * y[1:-1] + y[2:])
+    T = 4.0 * jnp.eye(m) + jnp.eye(m, k=1) + jnp.eye(m, k=-1)
+    interior = jnp.linalg.solve(T, rhs)
+    M = jnp.zeros(n)
+    return M.at[1:-1].set(interior)
 
-    def col_interp(z_b: Any, prof_g: Any) -> Any:
+
+def _natural_cubic_eval_z_jax(
+    z_b: Any,
+    x0: Any,
+    h: Any,
+    y: Any,
+    M: Any,
+    x_max: Any,
+) -> Any:
+    zc = jnp.clip(z_b, x0, x_max)
+    n = y.shape[0]
+    idx_float = (zc - x0) / h
+    i = jnp.floor(idx_float).astype(jnp.int64)
+    i = jnp.clip(i, 0, n - 2)
+    xi = x0 + i.astype(jnp.float64) * h
+    A = (xi + h - zc) / h
+    B = (zc - xi) / h
+    Mi = M[i]
+    Mi1 = M[i + 1]
+    yi = y[i]
+    yi1 = y[i + 1]
+    h2 = h * h
+    return A * yi + B * yi1 + ((A**3 - A) * Mi + (B**3 - B) * Mi1) * h2 / 6.0
+
+
+def _deboor_blend_jax(u: Any, d0: Any, d1: Any, left: Any, right: Any, eps: float) -> Any:
+    denom = right - left
+    alpha = jnp.where(jnp.abs(denom) < eps, 0.0, (u - left) / denom)
+    return (1.0 - alpha) * d0 + alpha * d1
+
+
+def _bspline_cubic_scalar_jax(u: Any, knots: Any, coeffs: Any, eps: float) -> Any:
+    p = 3
+    n_c = coeffs.shape[0]
+    ik = jnp.searchsorted(knots, u, side="right") - 1
+    ik = jnp.clip(ik, p, n_c - 1)
+    d = jax.lax.dynamic_slice(coeffs, (ik - p,), (p + 1,))
+    d = d.at[3].set(_deboor_blend_jax(u, d[2], d[3], knots[ik - p + 3], knots[ik + 3 + 1 - 1], eps))
+    d = d.at[2].set(_deboor_blend_jax(u, d[1], d[2], knots[ik - p + 2], knots[ik + 2 + 1 - 1], eps))
+    d = d.at[1].set(_deboor_blend_jax(u, d[0], d[1], knots[ik - p + 1], knots[ik + 1 + 1 - 1], eps))
+    d = d.at[3].set(_deboor_blend_jax(u, d[2], d[3], knots[ik - p + 3], knots[ik + 3 + 1 - 2], eps))
+    d = d.at[2].set(_deboor_blend_jax(u, d[1], d[2], knots[ik - p + 2], knots[ik + 2 + 1 - 2], eps))
+    d = d.at[3].set(_deboor_blend_jax(u, d[2], d[3], knots[ik - p + 3], knots[ik + 3 + 1 - 3], eps))
+    return d[3]
+
+
+def _interp_hidden(
+    z_bh: Any,
+    profiles_hg: Any,
+    x_grid: Any,
+    profile_interp: str,
+    eps: float,
+    bspline_knots: Any,
+) -> Any:
+    """z (B,H), profiles (H,G), x_grid (G,) -> hidden (B,H)."""
+
+    def col_linear(z_b: Any, prof_g: Any) -> Any:
         return jnp.interp(z_b, x_grid, prof_g)
 
-    return jax.vmap(col_interp, in_axes=(1, 0), out_axes=1)(z_bh, profiles_hg)
+    def col_cubic_natural(z_b: Any, prof_g: Any) -> Any:
+        h = x_grid[1] - x_grid[0]
+        x0 = x_grid[0]
+        x_max = x_grid[-1]
+        M = _natural_cubic_M_jax(prof_g, h)
+        return _natural_cubic_eval_z_jax(z_b, x0, h, prof_g, M, x_max)
+
+    def col_bspline(z_b: Any, prof_g: Any) -> Any:
+        return jax.vmap(lambda u: _bspline_cubic_scalar_jax(u, bspline_knots, prof_g, eps))(z_b)
+
+    if profile_interp == "linear":
+        return jax.vmap(col_linear, in_axes=(1, 0), out_axes=1)(z_bh, profiles_hg)
+    if profile_interp == "cubic_natural":
+        return jax.vmap(col_cubic_natural, in_axes=(1, 0), out_axes=1)(z_bh, profiles_hg)
+    return jax.vmap(col_bspline, in_axes=(1, 0), out_axes=1)(z_bh, profiles_hg)
 
 
 def _activation_offset(mode: str) -> int:
@@ -155,6 +233,8 @@ def _forward(
     num_grid_points: int,
     x_grid: Any,
     eps: float,
+    profile_interp: str,
+    bspline_knots: Any,
     *,
     tanh_preactivation: bool,
 ) -> Any:
@@ -164,7 +244,7 @@ def _forward(
         z = hidden @ weights.T + biases
         z_quantum = jnp.tanh(z) if tanh_preactivation else z
         profiles = _layer_profiles(mode, params, layer_idx, num_grid_points, eps)
-        quantum_hidden = _interp_hidden(z_quantum, profiles, x_grid)
+        quantum_hidden = _interp_hidden(z_quantum, profiles, x_grid, profile_interp, eps, bspline_knots)
         if family == "kan_quantum_hybrid":
             base_mix, quantum_mix = _branch_scales(mode, family, params, layer_idx)
             assert base_mix is not None
@@ -286,6 +366,8 @@ def train_quantum_activation_classifier_jax(
 
     num_grid_points = 2**config.n_qubits
     x_grid = jnp.linspace(-1.0, 1.0, num_grid_points)
+    bspline_knots = jnp.asarray(_open_uniform_knots(-1.0, 1.0, num_grid_points, 3), dtype=jnp.float64)
+    profile_interp = config.profile_interp
 
     key = jax.random.PRNGKey(config.seed)
     key, k_init = jax.random.split(key)
@@ -303,6 +385,8 @@ def train_quantum_activation_classifier_jax(
             num_grid_points,
             x_grid,
             EPS,
+            profile_interp,
+            bspline_knots,
             tanh_preactivation=_tanh_pre,
         )
         logp = logits - jax.nn.logsumexp(logits, axis=1, keepdims=True)

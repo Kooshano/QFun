@@ -1,0 +1,30 @@
+{
+  "label": "MNIST quantum-KAN hybrid Mode B",
+  "mode": "mode_b",
+  "hidden_function_family": "kan_quantum_hybrid",
+  "hidden_base_activation": "silu",
+  "profile_smoothness_reg": 0.001,
+  "train_accuracy": 0.8795,
+  "test_accuracy": 0.8732857142857143,
+  "macro_f1": 0.8709522208211828,
+  "representative_units": [
+    [
+      0,
+      5
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      1,
+      1
+    ]
+  ],
+  "eval_shots": 8000,
+  "snapshot_interval": 5
+}

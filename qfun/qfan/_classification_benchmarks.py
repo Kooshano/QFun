@@ -16,7 +16,9 @@ from sklearn.metrics import (
 )
 from sklearn.neural_network import MLPClassifier
 
+from .._utils import EPS
 from ..datasets import PreparedClassificationSplit
+from ._profile_interp import interp_profile_np
 from .quantum_activation_classifier import (
     ActivationComponents,
     ActivationMeasurement,
@@ -26,6 +28,31 @@ from .quantum_activation_classifier import (
 )
 
 LayerUnit = tuple[int, int]
+
+
+def _dense_plot_grid(x_grid: np.ndarray) -> np.ndarray:
+    x_grid = np.asarray(x_grid, dtype=float)
+    return np.linspace(float(x_grid[0]), float(x_grid[-1]), max(256, int(8 * len(x_grid))), dtype=np.float64)
+
+
+def _snapshot_curve_xy(
+    model: QuantumActivationClassifier,
+    x_grid: np.ndarray,
+    snap_profile: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Trajectory samples are stored on ``x_grid``; expand for smooth display.
+
+    For ``cubic_bspline`` training, snapshots only store combined values on the grid, not
+    B-spline coefficients, so evolution lines use natural cubic through those samples.
+    """
+    x_grid = np.asarray(x_grid, dtype=float)
+    prof = np.asarray(snap_profile, dtype=float)
+    x_fine = _dense_plot_grid(x_grid)
+    if model.profile_interp == "linear":
+        return x_fine, interp_profile_np(x_fine, x_grid, prof, "linear", EPS)
+    if model.profile_interp == "cubic_natural":
+        return x_fine, interp_profile_np(x_fine, x_grid, prof, "cubic_natural", EPS)
+    return x_fine, interp_profile_np(x_fine, x_grid, prof, "cubic_natural", EPS)
 
 
 @dataclass(frozen=True)
@@ -182,6 +209,7 @@ def run_quantum_experiment(
     hidden_function_family: str = "pure_superposition",
     hidden_base_activation: str = "silu",
     profile_smoothness_reg: float = 0.0,
+    profile_interp: str = "linear",
 ) -> QuantumExperimentResult:
     """Train one quantum-activation classifier and collect notebook-facing diagnostics."""
     cfg = QuantumActivationConfig(
@@ -201,6 +229,7 @@ def run_quantum_experiment(
         hidden_function_family=hidden_function_family,
         hidden_base_activation=hidden_base_activation,
         profile_smoothness_reg=profile_smoothness_reg,
+        profile_interp=profile_interp,
     )
     tracked_units = tuple(
         (layer_idx, unit_idx)
@@ -456,9 +485,10 @@ def plot_activation_evolution(
         layer_idx, unit_idx = tracked_units[profile_idx]
         for snap in training_curve_snapshots:
             t = 0.0 if smax == smin else (snap.step - smin) / (smax - smin)
+            xs, ys = _snapshot_curve_xy(model, x_grid, snap.profiles[profile_idx])
             ax.plot(
-                x_grid,
-                snap.profiles[profile_idx],
+                xs,
+                ys,
                 color=cmap(t),
                 alpha=0.85,
                 linewidth=1.2,
@@ -481,6 +511,7 @@ def plot_final_activation_profiles(
     import matplotlib.pyplot as plt
 
     x_grid = np.asarray(model.activation_grid, dtype=float)
+    x_fine = _dense_plot_grid(x_grid)
     for layer_idx, layer_width in enumerate(model.hidden_layer_sizes):
         ncols = 2
         nrows = int(np.ceil(layer_width / ncols))
@@ -490,8 +521,10 @@ def plot_final_activation_profiles(
             if unit_idx >= layer_width:
                 ax.axis("off")
                 continue
-            profile = model.get_activation_profile(layer_idx, unit_idx)
-            ax.plot(x_grid, profile, linewidth=2)
+            curves = model.eval_activation_components(layer_idx, unit_idx, x_coords=x_fine)
+            ax.plot(x_fine, curves.combined, linewidth=2)
+            knots = model.get_activation_profile(layer_idx, unit_idx)
+            ax.plot(x_grid, knots, "o", ms=2.5, alpha=0.45, color="C0")
             ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
             ax.set_title(f"Layer {layer_idx} unit {unit_idx}")
             ax.set_ylabel("activation")
@@ -515,28 +548,35 @@ def plot_measurement_overlays(
     fig, axes = plt.subplots(len(unit_indices), 1, figsize=(7, 3 * len(unit_indices)), sharex=True)
     axes = np.atleast_1d(axes)
     x_grid = np.asarray(model.activation_grid, dtype=float)
+    x_fine = _dense_plot_grid(x_grid)
     component_list = list(components) if components is not None else [None] * len(unit_indices)
     for ax, unit_ref, measurement, component in zip(axes, unit_indices, measurements, component_list):
         layer_idx, unit_idx = unit_ref
+        curves = model.eval_activation_components(layer_idx, unit_idx, x_coords=x_fine)
         if component is not None:
-            exact = component.quantum_scale * component.quantum_profile
+            exact_plot = curves.quantum
             exact_label = "exact quantum branch"
             measured = component.quantum_scale * measurement.profile
             measured_label = f"measured quantum ({shots} shots)"
         else:
-            exact = model.get_activation_profile(layer_idx, unit_idx)
+            exact_plot = curves.combined
             exact_label = "exact activation"
             measured = measurement.profile
             measured_label = f"measured ({shots} shots)"
-        ax.plot(x_grid, exact, "k--", linewidth=2, label=exact_label)
+        ax.plot(x_fine, exact_plot, "k--", linewidth=2, label=exact_label)
         ax.plot(x_grid, measured, linewidth=1.6, label=measured_label)
         ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
         ax.set_title(f"{title_prefix}: layer {layer_idx} unit {unit_idx}")
         ax.set_ylabel("activation")
         ax.legend(loc="best")
+        exact_on_grid = (
+            component.quantum
+            if component is not None
+            else model.get_activation_profile(layer_idx, unit_idx)
+        )
         print(
             f"layer {layer_idx} unit {unit_idx}: exact-vs-measured L1 = "
-            f"{np.sum(np.abs(exact - measured)):.6f}"
+            f"{np.sum(np.abs(exact_on_grid - measured)):.6f}"
         )
         if measurement.p_pos is not None and measurement.p_neg is not None:
             print(f"  measured p_pos + p_neg = {measurement.p_pos.sum() + measurement.p_neg.sum():.6f}")
@@ -559,11 +599,13 @@ def plot_activation_components(
     fig, axes = plt.subplots(len(unit_indices), 1, figsize=(7, 3 * len(unit_indices)), sharex=True)
     axes = np.atleast_1d(axes)
     x_grid = np.asarray(model.activation_grid, dtype=float)
+    x_fine = _dense_plot_grid(x_grid)
     for ax, unit_ref, component in zip(axes, unit_indices, components):
         layer_idx, unit_idx = unit_ref
-        ax.plot(x_grid, component.base, linewidth=1.5, label="base path")
-        ax.plot(x_grid, component.quantum, linewidth=1.5, label="quantum path")
-        ax.plot(x_grid, component.combined, "k--", linewidth=2.0, label="combined")
+        curves = model.eval_activation_components(layer_idx, unit_idx, x_coords=x_fine)
+        ax.plot(x_fine, curves.base, linewidth=1.5, label="base path")
+        ax.plot(x_fine, curves.quantum, linewidth=1.5, label="quantum path")
+        ax.plot(x_fine, curves.combined, "k--", linewidth=2.0, label="combined")
         ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
         ax.set_title(f"{title_prefix}: layer {layer_idx} unit {unit_idx}")
         ax.set_ylabel("activation")

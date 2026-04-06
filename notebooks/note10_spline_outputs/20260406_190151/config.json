@@ -1,0 +1,18 @@
+{
+  "data_seed": 7,
+  "test_size": 0.2,
+  "pca_components": 32,
+  "hidden_units": 6,
+  "n_qubits": 5,
+  "steps": 100,
+  "learning_rate": 0.01,
+  "log_every": 1,
+  "show_training_progress": true,
+  "snapshot_interval": 10,
+  "eval_shots": 8000,
+  "use_jax": true,
+  "batch_size": 1024,
+  "hidden_preactivation": "superposition",
+  "profile_interp": "cubic_natural",
+  "run_id": "20260406_190151"
+}

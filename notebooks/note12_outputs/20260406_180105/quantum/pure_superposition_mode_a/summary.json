@@ -1,0 +1,30 @@
+{
+  "label": "MNIST pure-superposition Mode A",
+  "mode": "mode_a",
+  "hidden_function_family": "pure_superposition",
+  "hidden_base_activation": "silu",
+  "profile_smoothness_reg": 0.0,
+  "train_accuracy": 0.82525,
+  "test_accuracy": 0.8187142857142857,
+  "macro_f1": 0.8152372636110845,
+  "representative_units": [
+    [
+      0,
+      5
+    ],
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      1,
+      5
+    ]
+  ],
+  "eval_shots": 8000,
+  "snapshot_interval": 5
+}

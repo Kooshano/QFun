@@ -1,0 +1,27 @@
+[
+  {
+    "model": "LogisticRegression",
+    "test_accuracy": 0.8894285714285715,
+    "macro_f1": 0.8874374704483025
+  },
+  {
+    "model": "MLPClassifier",
+    "test_accuracy": 0.9641428571428572,
+    "macro_f1": 0.9638014452121881
+  },
+  {
+    "model": "MNIST standard superposition (cubic_natural profile readout)",
+    "test_accuracy": 0.8409285714285715,
+    "macro_f1": 0.8381580080480358
+  },
+  {
+    "model": "MNIST Mode A (cubic_natural profile readout)",
+    "test_accuracy": 0.8465,
+    "macro_f1": 0.8435797376702692
+  },
+  {
+    "model": "MNIST Mode B (cubic_natural profile readout)",
+    "test_accuracy": 0.8430714285714286,
+    "macro_f1": 0.839601647066701
+  }
+]

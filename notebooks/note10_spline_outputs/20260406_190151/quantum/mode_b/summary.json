@@ -1,0 +1,19 @@
+{
+  "label": "MNIST Mode B (cubic_natural profile readout)",
+  "mode": "mode_b",
+  "train_accuracy": 0.8474642857142857,
+  "test_accuracy": 0.8413571428571428,
+  "macro_f1": 0.838468571997838,
+  "representative_units": [
+    [
+      0,
+      2
+    ],
+    [
+      0,
+      3
+    ]
+  ],
+  "eval_shots": 8000,
+  "snapshot_interval": 10
+}

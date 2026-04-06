@@ -1,0 +1,6 @@
+Model,Test accuracy,Macro-F1
+LogisticRegression,0.8894285714285715,0.8874374704483025
+MLPClassifier,0.9641428571428572,0.9638014452121881
+MNIST standard superposition (cubic_natural profile readout),0.8409285714285715,0.8381580080480358
+MNIST Mode A (cubic_natural profile readout),0.8465,0.8435797376702692
+MNIST Mode B (cubic_natural profile readout),0.8430714285714286,0.839601647066701

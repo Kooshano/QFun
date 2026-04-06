@@ -312,3 +312,97 @@ def test_jax_hybrid_training_supported_for_each_mode(iris_split_arrays):
         assert len(losses) == 2
         assert np.all(np.isfinite(losses))
         assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0
+
+
+def test_profile_interp_cubic_natural_matches_scipy():
+    from scipy.interpolate import CubicSpline
+
+    from qfun.qfan._profile_interp import interp_profile_np
+
+    rng = np.random.default_rng(0)
+    x = np.linspace(-1, 1, 12)
+    y = rng.standard_normal(12)
+    z = np.linspace(-1, 1, 200)
+    a = interp_profile_np(z, x, y, "cubic_natural")
+    b = CubicSpline(x, y, bc_type="natural")(np.clip(z, x[0], x[-1]))
+    assert np.allclose(a, b, rtol=1e-12, atol=1e-11)
+
+
+def test_profile_interp_cubic_bspline_matches_scipy():
+    from scipy.interpolate import BSpline
+
+    from qfun.qfan._profile_interp import _open_uniform_knots, interp_profile_np
+
+    rng = np.random.default_rng(1)
+    x = np.linspace(-1, 1, 16)
+    c = rng.standard_normal(16)
+    t = _open_uniform_knots(-1.0, 1.0, 16, 3)
+    z = np.linspace(-0.99, 0.99, 100)
+    a = interp_profile_np(z, x, c, "cubic_bspline")
+    b = BSpline(t, c, 3)(z)
+    assert np.allclose(a, b, rtol=1e-12, atol=1e-11)
+
+
+def test_invalid_profile_interp_raises_on_model_init():
+    with pytest.raises(ValueError, match="profile_interp"):
+        QuantumActivationClassifier(
+            QuantumActivationConfig(input_dim=4, hidden_units=2, profile_interp="not_a_mode")  # type: ignore[arg-type]
+        )
+
+
+def test_eval_activation_components_matches_grid_samples(iris_split_arrays):
+    x_train, _, _, _ = iris_split_arrays
+    cfg = QuantumActivationConfig(
+        input_dim=4,
+        hidden_units=4,
+        n_qubits=3,
+        n_classes=3,
+        profile_interp="cubic_natural",  # type: ignore[arg-type]
+    )
+    model = QuantumActivationClassifier(cfg)
+    x_grid = np.asarray(model.activation_grid, dtype=float)
+    for layer_idx in range(model.num_hidden_layers):
+        for unit_idx in range(model.hidden_layer_sizes[layer_idx]):
+            c_grid = model.get_activation_components(layer_idx, unit_idx)
+            c_dense = model.eval_activation_components(layer_idx, unit_idx, x_coords=x_grid)
+            assert np.allclose(c_grid.combined, c_dense.combined, rtol=1e-10, atol=1e-9)
+            assert np.allclose(c_grid.quantum, c_dense.quantum, rtol=1e-10, atol=1e-9)
+
+
+def test_predict_proba_each_profile_interp(iris_split_arrays):
+    x_train, _, _, _ = iris_split_arrays
+    for interp in ("linear", "cubic_natural", "cubic_bspline"):
+        cfg = QuantumActivationConfig(
+            input_dim=4,
+            hidden_units=4,
+            n_qubits=3,
+            n_classes=3,
+            profile_interp=interp,  # type: ignore[arg-type]
+        )
+        model = QuantumActivationClassifier(cfg)
+        probs = model.predict_proba(x_train[:5])
+        assert probs.shape == (5, 3)
+        assert np.allclose(np.sum(probs, axis=1), 1.0, atol=1e-6)
+
+
+def test_jax_training_cubic_natural_and_bspline(iris_split_arrays):
+    pytest.importorskip("jax")
+    pytest.importorskip("optax")
+    x_train, x_test, y_train, y_test = iris_split_arrays
+
+    for interp in ("cubic_natural", "cubic_bspline"):
+        cfg = QuantumActivationConfig(
+            input_dim=4,
+            hidden_units=4,
+            n_qubits=3,
+            n_classes=3,
+            steps=2,
+            seed=9,
+            use_jax=True,
+            batch_size=32,
+            profile_interp=interp,  # type: ignore[arg-type]
+        )
+        model, losses = train_quantum_activation_classifier(x_train, y_train, cfg)
+        assert len(losses) == 2
+        assert np.all(np.isfinite(losses))
+        assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0

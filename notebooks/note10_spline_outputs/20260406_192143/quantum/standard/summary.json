@@ -1,0 +1,19 @@
+{
+  "label": "MNIST standard superposition (cubic_natural profile readout)",
+  "mode": "standard",
+  "train_accuracy": 0.8469464285714285,
+  "test_accuracy": 0.8409285714285715,
+  "macro_f1": 0.8381580080480358,
+  "representative_units": [
+    [
+      0,
+      2
+    ],
+    [
+      0,
+      5
+    ]
+  ],
+  "eval_shots": 8000,
+  "snapshot_interval": 20
+}

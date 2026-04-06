@@ -1,0 +1,14 @@
+[
+  {
+    "key": "LogisticRegression",
+    "name": "LogisticRegression",
+    "accuracy": 0.8894285714285715,
+    "macro_f1": 0.8874374704483025
+  },
+  {
+    "key": "MLPClassifier",
+    "name": "MLPClassifier",
+    "accuracy": 0.9641428571428572,
+    "macro_f1": 0.9638014452121881
+  }
+]

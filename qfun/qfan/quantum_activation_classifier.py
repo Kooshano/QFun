@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pennylane as qml
 import pennylane.numpy as pnp
 
 from .._utils import EPS, _to_numpy_float
+from ._profile_interp import PROFILE_INTERP_MODES, _open_uniform_knots, interp_profile_np
 from ..quantum_learning import (
     measure_mode_a_superposition,
     measure_mode_b_superposition,
@@ -39,26 +40,79 @@ def _norm_amp_np(raw: np.ndarray, eps: float = EPS) -> np.ndarray:
     return raw / np.sqrt(np.sum(raw**2) + eps)
 
 
-def _interp_values_np(z: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, eps: float = EPS) -> np.ndarray:
-    """Linear interpolation of ``y_grid`` on ``x_grid``, evaluated at each ``z`` (vectorized)."""
-    z = np.clip(np.asarray(z, dtype=float), x_grid[0], x_grid[-1])
+def _silu_np(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    return x / (1.0 + np.exp(-x))
+
+
+def _interp_linear_pnp(z: Any, x_grid: Any, y_grid: Any, eps: float) -> Any:
+    z = pnp.clip(z, x_grid[0], x_grid[-1])
     dx = x_grid[1] - x_grid[0]
     idx_float = (z - x_grid[0]) / dx
-    idx0 = np.floor(idx_float).astype(np.int64)
-    idx0 = np.clip(idx0, 0, len(x_grid) - 1)
-    idx1 = np.clip(idx0 + 1, 0, len(x_grid) - 1)
-    x0 = x_grid[idx0]
-    x1 = x_grid[idx1]
-    y0 = y_grid[idx0]
-    y1 = y_grid[idx1]
-    denom = np.where(np.abs(x1 - x0) < eps, 1.0, x1 - x0)
+    idx0 = pnp.floor(idx_float)
+    idx0 = pnp.clip(idx0, 0, y_grid.shape[0] - 1)
+    idx1 = pnp.clip(idx0 + 1, 0, y_grid.shape[0] - 1)
+    i0 = idx0.astype(int)
+    i1 = idx1.astype(int)
+    x0 = x_grid[i0]
+    x1 = x_grid[i1]
+    y0 = y_grid[i0]
+    y1 = y_grid[i1]
+    denom = pnp.where(pnp.abs(x1 - x0) < eps, 1.0, x1 - x0)
     t = (z - x0) / denom
     return (1.0 - t) * y0 + t * y1
 
 
-def _silu_np(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x, dtype=float)
-    return x / (1.0 + np.exp(-x))
+def _interp_natural_cubic_pnp(z: Any, x_grid: Any, y_grid: Any, eps: float) -> Any:
+    yv = pnp.asarray(y_grid, dtype=float)
+    n = yv.shape[0]
+    h = x_grid[1] - x_grid[0]
+    if n < 4:
+        return _interp_linear_pnp(z, x_grid, yv, eps)
+    m = n - 2
+    inv_h2 = 6.0 / (h * h)
+    rhs = inv_h2 * (yv[:-2] - 2.0 * yv[1:-1] + yv[2:])
+    T = 4.0 * pnp.eye(m) + pnp.eye(m, k=1) + pnp.eye(m, k=-1)
+    interior = pnp.linalg.solve(T, rhs)
+    M = pnp.concatenate([pnp.array([0.0]), interior, pnp.array([0.0])])
+    zc = pnp.clip(z, x_grid[0], x_grid[-1])
+    idx_float = (zc - x_grid[0]) / h
+    i = pnp.clip(pnp.floor(idx_float), 0, n - 2).astype(int)
+    xi = x_grid[0] + i.astype(float) * h
+    A = (xi + h - zc) / h
+    B = (zc - xi) / h
+    Mi = M[i]
+    Mi1 = M[i + 1]
+    yi = yv[i]
+    yi1 = yv[i + 1]
+    h2 = h * h
+    return A * yi + B * yi1 + ((A**3 - A) * Mi + (B**3 - B) * Mi1) * h2 / 6.0
+
+
+def _deboor_mix_pnp(u: Any, d0: Any, d1: Any, left: float, right: float, eps: float) -> Any:
+    denom = right - left
+    alpha = pnp.where(pnp.abs(denom) < eps, 0.0, (u - left) / denom)
+    return (1.0 - alpha) * d0 + alpha * d1
+
+
+def _interp_bspline_pnp(z: Any, knots_np: np.ndarray, y_grid: Any, eps: float) -> Any:
+    """Open uniform cubic B-spline; ``knots_np`` is fixed NumPy (not differentiated)."""
+    coef = pnp.asarray(y_grid, dtype=float)
+    pdeg = 3
+    n_c = int(coef.shape[0])
+    lo = float(knots_np[pdeg])
+    hi = float(knots_np[-(pdeg + 1)])
+    u = pnp.clip(z, lo, hi)
+    u_np = float(_to_numpy_float(u).item())
+    ik = int(np.clip(np.searchsorted(knots_np, u_np, side="right") - 1, pdeg, n_c - 1))
+    t = knots_np
+    d = [coef[ik - pdeg + j] for j in range(pdeg + 1)]
+    for r in range(1, pdeg + 1):
+        for j in range(pdeg, r - 1, -1):
+            left = float(t[ik - pdeg + j])
+            right = float(t[ik + j + 1 - r])
+            d[j] = _deboor_mix_pnp(u, d[j - 1], d[j], left, right, eps)
+    return d[pdeg]
 
 
 @dataclass(frozen=True)
@@ -89,6 +143,10 @@ class QuantumActivationConfig:
     hidden_base_activation: str = "silu"
     #: Optional smoothness regularization applied to the effective quantum branch.
     profile_smoothness_reg: float = 0.0
+    #: How to read activation profiles on the discrete grid: piecewise linear (default),
+    #: natural cubic through grid values, or cubic B-spline with coefficients on an open
+    #: uniform knot vector (KAN-style; use ``use_jax=True`` for training).
+    profile_interp: Literal["linear", "cubic_natural", "cubic_bspline"] = "linear"
 
     def resolved_hidden_layers(self) -> tuple[int, ...]:
         """Return the effective hidden-layer widths.
@@ -159,12 +217,19 @@ class QuantumActivationClassifier:
             )
         if config.profile_smoothness_reg < 0.0:
             raise ValueError("profile_smoothness_reg must be nonnegative.")
-
+        if config.profile_interp not in PROFILE_INTERP_MODES:
+            raise ValueError(
+                f"profile_interp must be one of {PROFILE_INTERP_MODES}, got {config.profile_interp!r}."
+            )
+        _ng = 2 ** int(config.n_qubits)
+        if config.profile_interp in {"cubic_natural", "cubic_bspline"} and _ng < 4:
+            raise ValueError("cubic profile_interp modes require n_qubits >= 2 (at least 4 grid points).")
         self.input_dim = int(config.input_dim)
         self.hidden_layer_sizes = hidden_layers
         self.num_hidden_layers = len(hidden_layers)
         self.hidden_units = hidden_layers[-1]
         self.n_qubits = int(config.n_qubits)
+        self.profile_interp: Literal["linear", "cubic_natural", "cubic_bspline"] = config.profile_interp
         self.n_classes = int(config.n_classes)
         self.mode = config.mode
         self.hidden_preactivation = config.hidden_preactivation
@@ -173,6 +238,7 @@ class QuantumActivationClassifier:
         self.profile_smoothness_reg = float(config.profile_smoothness_reg)
         self.num_grid_points = 2**self.n_qubits
         self.activation_grid = pnp.array(np.linspace(-1.0, 1.0, self.num_grid_points))
+        self._bspline_knots_np = _open_uniform_knots(-1.0, 1.0, self.num_grid_points, 3)
 
         rng = np.random.default_rng(config.seed)
 
@@ -396,21 +462,12 @@ class QuantumActivationClassifier:
         return float(np.asarray(self.quantum_mix_layers[layer_idx][unit_idx], dtype=float))
 
     def _interp_value(self, y_grid: Any, z: Any) -> Any:
-        z = pnp.clip(z, self.activation_grid[0], self.activation_grid[-1])
-        dx = self.activation_grid[1] - self.activation_grid[0]
-        idx_float = (z - self.activation_grid[0]) / dx
-        idx0 = pnp.floor(idx_float)
-        idx0 = pnp.clip(idx0, 0, self.num_grid_points - 1)
-        idx1 = pnp.clip(idx0 + 1, 0, self.num_grid_points - 1)
-        i0 = idx0.astype(int)
-        i1 = idx1.astype(int)
-        x0 = self.activation_grid[i0]
-        x1 = self.activation_grid[i1]
-        y0 = y_grid[i0]
-        y1 = y_grid[i1]
-        denom = pnp.where(pnp.abs(x1 - x0) < EPS, 1.0, x1 - x0)
-        t = (z - x0) / denom
-        return (1.0 - t) * y0 + t * y1
+        yv = pnp.asarray(y_grid, dtype=float)
+        if self.profile_interp == "linear":
+            return _interp_linear_pnp(z, self.activation_grid, yv, EPS)
+        if self.profile_interp == "cubic_natural":
+            return _interp_natural_cubic_pnp(z, self.activation_grid, yv, EPS)
+        return _interp_bspline_pnp(z, self._bspline_knots_np, yv, EPS)
 
     def _apply_hidden_layer(self, inputs: Any, layer_idx: int) -> Any:
         x_vec = pnp.array(inputs, dtype=float)
@@ -474,7 +531,9 @@ class QuantumActivationClassifier:
         quantum_profile = self._quantum_profile_np(layer_idx, unit_idx)
         quantum_scale = self._quantum_scale_np(layer_idx, unit_idx)
         quantum_inputs = self._quantum_branch_input_np(x_grid)
-        quantum_curve = quantum_scale * _interp_values_np(quantum_inputs, x_grid, quantum_profile)
+        quantum_curve = quantum_scale * interp_profile_np(
+            quantum_inputs, x_grid, quantum_profile, self.profile_interp, EPS
+        )
         base_scale = self._base_scale_np(layer_idx, unit_idx)
         base_curve = base_scale * _silu_np(x_grid)
         combined = base_curve + quantum_curve
@@ -505,7 +564,9 @@ class QuantumActivationClassifier:
             quantum_out = np.empty((n, width), dtype=np.float64)
             for h in range(width):
                 prof = self._quantum_profile_np(layer_idx, h)
-                quantum_out[:, h] = _interp_values_np(z_quantum[:, h], x_grid, prof)
+                quantum_out[:, h] = interp_profile_np(
+                    z_quantum[:, h], x_grid, prof, self.profile_interp, EPS
+                )
             if self.hidden_function_family == "kan_quantum_hybrid":
                 base_scales = np.asarray(self.base_mix_layers[layer_idx], dtype=np.float64).reshape(1, -1)
                 quantum_scales = np.asarray(self.quantum_mix_layers[layer_idx], dtype=np.float64).reshape(1, -1)
@@ -530,6 +591,40 @@ class QuantumActivationClassifier:
     def get_activation_components(self, layer_idx: int, unit_idx: int | None = None) -> ActivationComponents:
         layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
         return self._activation_components_np(layer_idx, unit_idx)
+
+    def eval_activation_components(
+        self,
+        layer_idx: int,
+        unit_idx: int | None = None,
+        *,
+        x_coords: np.ndarray,
+    ) -> ActivationComponents:
+        """Evaluate base, quantum, and combined activation curves at arbitrary coordinates.
+
+        Uses the same interpolation as the forward pass (``profile_interp``), so plots
+        can show smooth splines instead of connecting only the discrete grid samples.
+        """
+        layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
+        self._validate_layer_unit_idx(layer_idx, unit_idx)
+        x_coords = np.asarray(x_coords, dtype=np.float64).ravel()
+        x_grid = np.asarray(self.activation_grid, dtype=np.float64)
+        quantum_profile = self._quantum_profile_np(layer_idx, unit_idx)
+        quantum_scale = self._quantum_scale_np(layer_idx, unit_idx)
+        quantum_inputs = self._quantum_branch_input_np(x_coords)
+        quantum_curve = quantum_scale * interp_profile_np(
+            quantum_inputs, x_grid, quantum_profile, self.profile_interp, EPS
+        )
+        base_scale = self._base_scale_np(layer_idx, unit_idx)
+        base_curve = base_scale * _silu_np(x_coords)
+        combined = base_curve + quantum_curve
+        return ActivationComponents(
+            base=base_curve,
+            quantum=quantum_curve,
+            combined=combined,
+            quantum_profile=quantum_profile,
+            base_scale=base_scale,
+            quantum_scale=quantum_scale,
+        )
 
     def get_activation_profile(self, layer_idx: int, unit_idx: int | None = None) -> np.ndarray:
         layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
