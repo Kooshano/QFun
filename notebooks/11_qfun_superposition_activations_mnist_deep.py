@@ -166,7 +166,7 @@ test_size = 0.2
 pca_components = 32
 
 # Tuple needs a trailing comma for one layer: ``(6,)`` — ``(6)`` is just the int 6.
-hidden_layers = (8,)
+hidden_layers = (6, 6)
 if isinstance(hidden_layers, int):
     hidden_layers = (hidden_layers,)
 else:
@@ -188,8 +188,8 @@ except ImportError:
     use_jax = False
     print('Tip: pip install "qfun[gpu]" for JAX training on full MNIST (much faster).')
 
-batch_size = 128
-hidden_preactivation = "tanh"  # or "tanh"
+batch_size = 1024
+hidden_preactivation = "superposition"
 
 _save_json(
     OUTPUT_ROOT / "config.json",

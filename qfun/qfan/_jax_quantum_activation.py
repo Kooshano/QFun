@@ -82,6 +82,10 @@ def _profiles_mode_b(
     return jax.vmap(one)(raw_plus, raw_minus, raw_logits)
 
 
+def _silu(x: Any) -> Any:
+    return x * jax.nn.sigmoid(x)
+
+
 def _interp_hidden(z_bh: Any, profiles_hg: Any, x_grid: Any) -> Any:
     """Linear interp: z (B,H), profiles (H,G), x_grid (G,) -> hidden (B,H)."""
 
@@ -89,6 +93,10 @@ def _interp_hidden(z_bh: Any, profiles_hg: Any, x_grid: Any) -> Any:
         return jnp.interp(z_b, x_grid, prof_g)
 
     return jax.vmap(col_interp, in_axes=(1, 0), out_axes=1)(z_bh, profiles_hg)
+
+
+def _activation_offset(mode: str) -> int:
+    return 5 if mode in {"standard", "mode_a"} else 7
 
 
 def _layer_profiles(mode: str, params: tuple[Any, ...], layer_idx: int, num_grid_points: int, eps: float) -> Any:
@@ -102,10 +110,48 @@ def _layer_profiles(mode: str, params: tuple[Any, ...], layer_idx: int, num_grid
     return _profiles_mode_b(raw_plus[layer_idx], raw_minus[layer_idx], raw_logits[layer_idx], num_grid_points, eps)
 
 
+def _branch_scales(
+    mode: str,
+    family: str,
+    params: tuple[Any, ...],
+    layer_idx: int,
+) -> tuple[Any | None, Any | None]:
+    if family != "kan_quantum_hybrid":
+        return None, None
+    offset = _activation_offset(mode)
+    base_mix_layers = params[offset]
+    quantum_mix_layers = params[offset + 1]
+    return base_mix_layers[layer_idx], quantum_mix_layers[layer_idx]
+
+
+def _smoothness_penalty(
+    params: tuple[Any, ...],
+    mode: str,
+    family: str,
+    num_layers: int,
+    num_grid_points: int,
+    eps: float,
+) -> Any:
+    if family != "kan_quantum_hybrid":
+        return jnp.array(0.0, dtype=jnp.float64)
+    penalties = []
+    for layer_idx in range(num_layers):
+        profiles = _layer_profiles(mode, params, layer_idx, num_grid_points, eps)
+        _, quantum_mix = _branch_scales(mode, family, params, layer_idx)
+        assert quantum_mix is not None
+        effective = quantum_mix[:, None] * profiles
+        diffs = effective[:, 1:] - effective[:, :-1]
+        penalties.append(jnp.mean(diffs**2))
+    if not penalties:
+        return jnp.array(0.0, dtype=jnp.float64)
+    return jnp.mean(jnp.stack(penalties))
+
+
 def _forward(
     params: tuple[Any, ...],
     x: Any,
     mode: str,
+    family: str,
     num_grid_points: int,
     x_grid: Any,
     eps: float,
@@ -116,10 +162,16 @@ def _forward(
     hidden = x
     for layer_idx, (weights, biases) in enumerate(zip(hidden_weights, hidden_biases)):
         z = hidden @ weights.T + biases
-        if tanh_preactivation:
-            z = jnp.tanh(z)
+        z_quantum = jnp.tanh(z) if tanh_preactivation else z
         profiles = _layer_profiles(mode, params, layer_idx, num_grid_points, eps)
-        hidden = _interp_hidden(z, profiles, x_grid)
+        quantum_hidden = _interp_hidden(z_quantum, profiles, x_grid)
+        if family == "kan_quantum_hybrid":
+            base_mix, quantum_mix = _branch_scales(mode, family, params, layer_idx)
+            assert base_mix is not None
+            assert quantum_mix is not None
+            hidden = base_mix.reshape((1, -1)) * _silu(z) + quantum_mix.reshape((1, -1)) * quantum_hidden
+        else:
+            hidden = quantum_hidden
     return hidden @ w_out.T + b_out
 
 
@@ -131,6 +183,8 @@ def _init_params(key: Any, config: QuantumActivationConfig) -> tuple[Any, ...]:
     raw_plus: list[Any] = []
     raw_minus: list[Any] = []
     raw_logits: list[Any] = []
+    base_mix: list[Any] = []
+    quantum_mix: list[Any] = []
 
     prev_dim = config.input_dim
     key_count = max(4 * len(hidden_layers) + 4, 8)
@@ -154,22 +208,29 @@ def _init_params(key: Any, config: QuantumActivationConfig) -> tuple[Any, ...]:
             raw_plus.append(jax.random.normal(take_key(), (width, 2**config.n_qubits)) * 0.25)
             raw_minus.append(jax.random.normal(take_key(), (width, 2**config.n_qubits)) * 0.25)
             raw_logits.append(jax.random.normal(take_key(), (width, 2)) * 0.05)
+        if config.hidden_function_family == "kan_quantum_hybrid":
+            base_mix.append(jnp.ones((width,), dtype=jnp.float64))
+            quantum_mix.append(jnp.ones((width,), dtype=jnp.float64))
         prev_dim = width
 
     w_out = jax.random.normal(take_key(), (config.n_classes, hidden_layers[-1])) * 0.35
     b_out = jnp.zeros((config.n_classes,), dtype=jnp.float64)
 
     if config.mode in {"standard", "mode_a"}:
-        return (tuple(hidden_weights), tuple(hidden_biases), w_out, b_out, tuple(raw_profiles))
-    return (
-        tuple(hidden_weights),
-        tuple(hidden_biases),
-        w_out,
-        b_out,
-        tuple(raw_plus),
-        tuple(raw_minus),
-        tuple(raw_logits),
-    )
+        params: tuple[Any, ...] = (tuple(hidden_weights), tuple(hidden_biases), w_out, b_out, tuple(raw_profiles))
+    else:
+        params = (
+            tuple(hidden_weights),
+            tuple(hidden_biases),
+            w_out,
+            b_out,
+            tuple(raw_plus),
+            tuple(raw_minus),
+            tuple(raw_logits),
+        )
+    if config.hidden_function_family == "kan_quantum_hybrid":
+        params = params + (tuple(base_mix), tuple(quantum_mix))
+    return params
 
 
 def _params_to_model(
@@ -186,21 +247,21 @@ def _params_to_model(
 
     if model.mode in {"standard", "mode_a"}:
         raw_profiles = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[4]]
-        model.set_parameters(*hidden_weights, *hidden_biases, w_out, b_out, *raw_profiles)
-        return
+        activation_params: list[Any] = [*raw_profiles]
+        next_offset = 5
+    else:
+        raw_plus = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[4]]
+        raw_minus = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[5]]
+        raw_logits = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[6]]
+        activation_params = [*raw_plus, *raw_minus, *raw_logits]
+        next_offset = 7
 
-    raw_plus = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[4]]
-    raw_minus = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[5]]
-    raw_logits = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[6]]
-    model.set_parameters(
-        *hidden_weights,
-        *hidden_biases,
-        w_out,
-        b_out,
-        *raw_plus,
-        *raw_minus,
-        *raw_logits,
-    )
+    if model.hidden_function_family == "kan_quantum_hybrid":
+        base_mix = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[next_offset]]
+        quantum_mix = [pnp.array(np.asarray(x, dtype=float), requires_grad=True) for x in params[next_offset + 1]]
+        activation_params.extend([*base_mix, *quantum_mix])
+
+    model.set_parameters(*hidden_weights, *hidden_biases, w_out, b_out, *activation_params)
 
 
 def train_quantum_activation_classifier_jax(
@@ -229,6 +290,7 @@ def train_quantum_activation_classifier_jax(
     key = jax.random.PRNGKey(config.seed)
     key, k_init = jax.random.split(key)
     params = _init_params(k_init, config)
+    hidden_layers = config.resolved_hidden_layers()
 
     _tanh_pre = config.hidden_preactivation == "tanh"
 
@@ -237,13 +299,23 @@ def train_quantum_activation_classifier_jax(
             p,
             xb,
             config.mode,
+            config.hidden_function_family,
             num_grid_points,
             x_grid,
             EPS,
             tanh_preactivation=_tanh_pre,
         )
         logp = logits - jax.nn.logsumexp(logits, axis=1, keepdims=True)
-        return -jnp.mean(jnp.sum(yb * logp, axis=1))
+        data_loss = -jnp.mean(jnp.sum(yb * logp, axis=1))
+        reg_loss = config.profile_smoothness_reg * _smoothness_penalty(
+            p,
+            config.mode,
+            config.hidden_function_family,
+            len(hidden_layers),
+            num_grid_points,
+            EPS,
+        )
+        return data_loss + reg_loss
 
     loss_grad = jax.value_and_grad(loss_batch)
 

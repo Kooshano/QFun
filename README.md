@@ -127,6 +127,8 @@ The maintained notebooks live in [notebooks](notebooks):
    Run the single-layer superposition-activation classifier on PCA-compressed full MNIST.
 11. [11_qfun_superposition_activations_mnist_deep.ipynb](notebooks/11_qfun_superposition_activations_mnist_deep.ipynb)  
    Extend the same MNIST benchmark to a deeper stack of learned superposition activations with `hidden_layers=(6, 6)`.
+12. [12_qfun_quantum_kan_mnist_ablation.ipynb](notebooks/12_qfun_quantum_kan_mnist_ablation.ipynb)  
+   Compare the pure deep superposition model against a KAN-like hybrid with `base_mix * SiLU(z) + quantum_mix * quantum_profile(z_q)` on PCA-compressed MNIST.
 
 If you installed the dev extras, open them with Jupyter:
 
@@ -169,6 +171,11 @@ from qfun.qfan import (
 ```
 
 `QuantumActivationConfig` supports both the legacy single-layer form (`hidden_units=6`) and the deep form (`hidden_layers=(6, 6)`).
+
+It also supports two hidden-function families:
+
+- `hidden_function_family="pure_superposition"` for the original learned quantum activation path
+- `hidden_function_family="kan_quantum_hybrid"` for the KAN-like base-plus-quantum hidden units used in notebook 12
 
 `QKANBlock` remains available as a deprecated alias for `QFANBlock` (emits `DeprecationWarning` on use). Prefer `QFANBlock` in new code.
 

@@ -58,7 +58,7 @@ Notebook 11 still uses `QuantumActivationClassifier`, but with the new config:
 QuantumActivationConfig(
     input_dim=32,
     hidden_layers=(6, 6),
-    n_qubits=3,
+    n_qubits=5,
     n_classes=10,
     mode="standard" | "mode_a" | "mode_b",
 )
@@ -69,19 +69,19 @@ With those defaults:
 - input dimension `D = 32`
 - hidden layer widths `(6, 6)`
 - classes `C = 10`
-- qubits `Q = 3`
-- grid points `G = 2^Q = 8`
+- qubits `Q = 5`
+- grid points `G = 2^Q = 32`
 
 The learned structure is:
 
 - hidden layer 0:
   - weights `(6, 32)`
   - bias `(6,)`
-  - per-unit activation profiles on an 8-point grid
+  - per-unit activation profiles on a 32-point grid
 - hidden layer 1:
   - weights `(6, 6)`
   - bias `(6,)`
-  - another bank of per-unit activation profiles on the same 8-point grid
+  - another bank of per-unit activation profiles on the same 32-point grid
 - output layer:
   - weights `(10, 6)`
   - bias `(10,)`

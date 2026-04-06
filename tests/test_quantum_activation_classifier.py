@@ -37,22 +37,40 @@ def test_activation_profiles_and_measurements_have_expected_shapes():
         single_model = QuantumActivationClassifier(single_cfg)
 
         single_profile = single_model.get_activation_profile(0)
+        single_components = single_model.get_activation_components(0)
         single_measurement = single_model.measure_activation_profile(0, shots=400)
 
         assert single_profile.shape == (8,)
+        assert single_components.base.shape == (8,)
+        assert single_components.quantum.shape == (8,)
+        assert single_components.combined.shape == (8,)
+        assert single_components.quantum_profile.shape == (8,)
         assert single_measurement.profile.shape == (8,)
         assert np.all(np.isfinite(single_profile))
+        assert np.all(np.isfinite(single_components.base))
+        assert np.all(np.isfinite(single_components.quantum))
+        assert np.all(np.isfinite(single_components.combined))
+        assert np.all(np.isfinite(single_components.quantum_profile))
         assert np.all(np.isfinite(single_measurement.profile))
 
         deep_cfg = QuantumActivationConfig(input_dim=4, hidden_layers=(3, 3), n_qubits=3, mode=mode)
         deep_model = QuantumActivationClassifier(deep_cfg)
 
         deep_profile = deep_model.get_activation_profile(1, 2)
+        deep_components = deep_model.get_activation_components(1, 2)
         deep_measurement = deep_model.measure_activation_profile(1, 2, shots=400)
 
         assert deep_profile.shape == (8,)
+        assert deep_components.base.shape == (8,)
+        assert deep_components.quantum.shape == (8,)
+        assert deep_components.combined.shape == (8,)
+        assert deep_components.quantum_profile.shape == (8,)
         assert deep_measurement.profile.shape == (8,)
         assert np.all(np.isfinite(deep_profile))
+        assert np.all(np.isfinite(deep_components.base))
+        assert np.all(np.isfinite(deep_components.quantum))
+        assert np.all(np.isfinite(deep_components.combined))
+        assert np.all(np.isfinite(deep_components.quantum_profile))
         assert np.all(np.isfinite(deep_measurement.profile))
 
 
@@ -174,6 +192,54 @@ def test_invalid_hidden_preactivation_raises():
         QuantumActivationClassifier(cfg)
 
 
+def test_invalid_hybrid_config_fields_raise():
+    with pytest.raises(ValueError, match="hidden_function_family"):
+        QuantumActivationClassifier(
+            QuantumActivationConfig(
+                input_dim=4,
+                hidden_units=3,
+                hidden_function_family="unknown",
+            )
+        )
+    with pytest.raises(ValueError, match="hidden_base_activation"):
+        QuantumActivationClassifier(
+            QuantumActivationConfig(
+                input_dim=4,
+                hidden_units=3,
+                hidden_function_family="kan_quantum_hybrid",
+                hidden_base_activation="relu",
+            )
+        )
+    with pytest.raises(ValueError, match="profile_smoothness_reg"):
+        QuantumActivationClassifier(
+            QuantumActivationConfig(
+                input_dim=4,
+                hidden_units=3,
+                profile_smoothness_reg=-1e-3,
+            )
+        )
+
+
+def test_hybrid_components_include_nonzero_branch_scales():
+    cfg = QuantumActivationConfig(
+        input_dim=4,
+        hidden_layers=(3, 3),
+        n_qubits=3,
+        hidden_function_family="kan_quantum_hybrid",
+        hidden_base_activation="silu",
+    )
+    model = QuantumActivationClassifier(cfg)
+
+    components = model.get_activation_components(1, 1)
+
+    assert np.isfinite(components.base_scale)
+    assert np.isfinite(components.quantum_scale)
+    assert components.quantum_scale != 0.0
+    assert np.all(np.isfinite(components.base))
+    assert np.all(np.isfinite(components.quantum))
+    assert np.all(np.isfinite(components.combined))
+
+
 def test_jax_tanh_preactivation_runs(iris_split_arrays):
     pytest.importorskip("jax")
     pytest.importorskip("optax")
@@ -194,3 +260,55 @@ def test_jax_tanh_preactivation_runs(iris_split_arrays):
     assert len(losses) == 2
     assert model.hidden_preactivation == "tanh"
     assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0
+
+
+def test_hybrid_family_trains_with_finite_metrics_for_all_modes(iris_split_arrays):
+    x_train, x_test, y_train, y_test = iris_split_arrays
+
+    for mode in ("standard", "mode_a", "mode_b"):
+        cfg = QuantumActivationConfig(
+            input_dim=4,
+            hidden_layers=(4, 4),
+            n_qubits=3,
+            n_classes=3,
+            mode=mode,
+            learning_rate=0.05,
+            steps=12,
+            seed=7,
+            hidden_function_family="kan_quantum_hybrid",
+            hidden_base_activation="silu",
+            profile_smoothness_reg=1e-3,
+        )
+
+        model, losses = train_quantum_activation_classifier(x_train, y_train, cfg)
+
+        assert len(losses) == 12
+        assert np.all(np.isfinite(losses))
+        assert np.isfinite(model.accuracy(x_test, y_test))
+
+
+def test_jax_hybrid_training_supported_for_each_mode(iris_split_arrays):
+    pytest.importorskip("jax")
+    pytest.importorskip("optax")
+    x_train, x_test, y_train, y_test = iris_split_arrays
+
+    for mode in ("standard", "mode_a", "mode_b"):
+        cfg = QuantumActivationConfig(
+            input_dim=4,
+            hidden_layers=(3, 3),
+            n_qubits=3,
+            n_classes=3,
+            mode=mode,
+            steps=2,
+            seed=5,
+            use_jax=True,
+            batch_size=32,
+            hidden_function_family="kan_quantum_hybrid",
+            hidden_base_activation="silu",
+            profile_smoothness_reg=1e-3,
+        )
+
+        model, losses = train_quantum_activation_classifier(x_train, y_train, cfg)
+        assert len(losses) == 2
+        assert np.all(np.isfinite(losses))
+        assert 0.0 <= model.accuracy(x_test, y_test) <= 1.0

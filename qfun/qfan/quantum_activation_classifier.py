@@ -56,6 +56,11 @@ def _interp_values_np(z: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, eps
     return (1.0 - t) * y0 + t * y1
 
 
+def _silu_np(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    return x / (1.0 + np.exp(-x))
+
+
 @dataclass(frozen=True)
 class QuantumActivationConfig:
     input_dim: int
@@ -77,6 +82,13 @@ class QuantumActivationConfig:
     #: (values clipped to the grid). ``"tanh"``: apply ``tanh`` before interpolation so
     #: inputs stay in ``(-1, 1)`` (legacy bounded path, often easier to optimize).
     hidden_preactivation: str = "superposition"
+    #: ``"pure_superposition"`` keeps the original learned quantum activation only.
+    #: ``"kan_quantum_hybrid"`` adds a KAN-like classical base path plus quantum correction.
+    hidden_function_family: str = "pure_superposition"
+    #: Base-path activation for the hybrid family. Only ``"silu"`` is currently supported.
+    hidden_base_activation: str = "silu"
+    #: Optional smoothness regularization applied to the effective quantum branch.
+    profile_smoothness_reg: float = 0.0
 
     def resolved_hidden_layers(self) -> tuple[int, ...]:
         """Return the effective hidden-layer widths.
@@ -108,6 +120,16 @@ class ActivationMeasurement:
     z_minus: float | None = None
 
 
+@dataclass(frozen=True)
+class ActivationComponents:
+    base: np.ndarray
+    quantum: np.ndarray
+    combined: np.ndarray
+    quantum_profile: np.ndarray
+    base_scale: float
+    quantum_scale: float
+
+
 class QuantumActivationClassifier:
     """Small multiclass classifier with learned 1D superposition activations."""
 
@@ -126,6 +148,17 @@ class QuantumActivationClassifier:
                 'hidden_preactivation must be "superposition" or "tanh", '
                 f"got {config.hidden_preactivation!r}."
             )
+        if config.hidden_function_family not in {"pure_superposition", "kan_quantum_hybrid"}:
+            raise ValueError(
+                'hidden_function_family must be "pure_superposition" or "kan_quantum_hybrid", '
+                f"got {config.hidden_function_family!r}."
+            )
+        if config.hidden_base_activation not in {"silu"}:
+            raise ValueError(
+                f"hidden_base_activation must be 'silu', got {config.hidden_base_activation!r}."
+            )
+        if config.profile_smoothness_reg < 0.0:
+            raise ValueError("profile_smoothness_reg must be nonnegative.")
 
         self.input_dim = int(config.input_dim)
         self.hidden_layer_sizes = hidden_layers
@@ -135,6 +168,9 @@ class QuantumActivationClassifier:
         self.n_classes = int(config.n_classes)
         self.mode = config.mode
         self.hidden_preactivation = config.hidden_preactivation
+        self.hidden_function_family = config.hidden_function_family
+        self.hidden_base_activation = config.hidden_base_activation
+        self.profile_smoothness_reg = float(config.profile_smoothness_reg)
         self.num_grid_points = 2**self.n_qubits
         self.activation_grid = pnp.array(np.linspace(-1.0, 1.0, self.num_grid_points))
 
@@ -199,12 +235,29 @@ class QuantumActivationClassifier:
                 for width in self.hidden_layer_sizes
             ]
 
+        self.base_mix_layers = [
+            pnp.array(
+                np.ones(width, dtype=float) if self.hidden_function_family == "kan_quantum_hybrid" else np.zeros(width, dtype=float),
+                requires_grad=self.hidden_function_family == "kan_quantum_hybrid",
+            )
+            for width in self.hidden_layer_sizes
+        ]
+        self.quantum_mix_layers = [
+            pnp.array(
+                np.ones(width, dtype=float),
+                requires_grad=self.hidden_function_family == "kan_quantum_hybrid",
+            )
+            for width in self.hidden_layer_sizes
+        ]
+
         self._sync_legacy_aliases()
 
     def _sync_legacy_aliases(self) -> None:
         """Keep first-layer aliases available for backward compatibility."""
         self.W_in = self.hidden_weights[0]
         self.b_in = self.hidden_biases[0]
+        self.base_mix = self.base_mix_layers[0]
+        self.quantum_mix = self.quantum_mix_layers[0]
         if self.mode in {"standard", "mode_a"}:
             self.raw_profiles = self.raw_profiles_layers[0]
         else:
@@ -220,8 +273,12 @@ class QuantumActivationClassifier:
             self.b_out,
         ]
         if self.mode in {"standard", "mode_a"}:
-            return base + list(self.raw_profiles_layers)
-        return base + list(self.raw_plus_layers) + list(self.raw_minus_layers) + list(self.raw_channel_logits_layers)
+            base += list(self.raw_profiles_layers)
+        else:
+            base += list(self.raw_plus_layers) + list(self.raw_minus_layers) + list(self.raw_channel_logits_layers)
+        if self.hidden_function_family == "kan_quantum_hybrid":
+            base += list(self.base_mix_layers) + list(self.quantum_mix_layers)
+        return base
 
     def set_parameters(self, *params: Any) -> None:
         n_layers = self.num_hidden_layers
@@ -236,16 +293,27 @@ class QuantumActivationClassifier:
 
         remaining = list(params[base_count:])
         if self.mode in {"standard", "mode_a"}:
-            if len(remaining) != n_layers:
-                raise ValueError(f"Expected {n_layers} activation tensors, got {len(remaining)}.")
-            self.raw_profiles_layers = remaining
+            if len(remaining) < n_layers:
+                raise ValueError(f"Expected at least {n_layers} activation tensors, got {len(remaining)}.")
+            self.raw_profiles_layers = remaining[:n_layers]
+            remaining = remaining[n_layers:]
         else:
             expected = 3 * n_layers
-            if len(remaining) != expected:
-                raise ValueError(f"Expected {expected} activation tensors, got {len(remaining)}.")
+            if len(remaining) < expected:
+                raise ValueError(f"Expected at least {expected} activation tensors, got {len(remaining)}.")
             self.raw_plus_layers = remaining[:n_layers]
             self.raw_minus_layers = remaining[n_layers : 2 * n_layers]
-            self.raw_channel_logits_layers = remaining[2 * n_layers :]
+            self.raw_channel_logits_layers = remaining[2 * n_layers : expected]
+            remaining = remaining[expected:]
+
+        if self.hidden_function_family == "kan_quantum_hybrid":
+            expected_scales = 2 * n_layers
+            if len(remaining) != expected_scales:
+                raise ValueError(f"Expected {expected_scales} branch-scale tensors, got {len(remaining)}.")
+            self.base_mix_layers = remaining[:n_layers]
+            self.quantum_mix_layers = remaining[n_layers:]
+        elif remaining:
+            raise ValueError(f"Unexpected extra parameters for pure_superposition model: {len(remaining)}")
 
         self._sync_legacy_aliases()
 
@@ -265,6 +333,19 @@ class QuantumActivationClassifier:
         layer_width = self.hidden_layer_sizes[layer_idx]
         if unit_idx < 0 or unit_idx >= layer_width:
             raise IndexError(f"unit_idx must be in [0, {layer_width - 1}], got {unit_idx}")
+
+    def _silu_expr(self, x: Any) -> Any:
+        return x / (1.0 + pnp.exp(-x))
+
+    def _quantum_branch_input(self, z: Any) -> Any:
+        if self.hidden_preactivation == "tanh":
+            return pnp.tanh(z)
+        return z
+
+    def _quantum_branch_input_np(self, z: np.ndarray) -> np.ndarray:
+        if self.hidden_preactivation == "tanh":
+            return np.tanh(z)
+        return np.asarray(z, dtype=float)
 
     def _standard_profile(self, raw_params: Any) -> Any:
         amps = normalize_real_amplitudes(raw_params)
@@ -298,6 +379,22 @@ class QuantumActivationClassifier:
             self.raw_channel_logits_layers[layer_idx][unit_idx],
         )
 
+    def _base_scale_expr(self, layer_idx: int, unit_idx: int) -> Any:
+        if self.hidden_function_family != "kan_quantum_hybrid":
+            return pnp.array(0.0)
+        return self.base_mix_layers[layer_idx][unit_idx]
+
+    def _quantum_scale_expr(self, layer_idx: int, unit_idx: int) -> Any:
+        return self.quantum_mix_layers[layer_idx][unit_idx]
+
+    def _base_scale_np(self, layer_idx: int, unit_idx: int) -> float:
+        if self.hidden_function_family != "kan_quantum_hybrid":
+            return 0.0
+        return float(np.asarray(self.base_mix_layers[layer_idx][unit_idx], dtype=float))
+
+    def _quantum_scale_np(self, layer_idx: int, unit_idx: int) -> float:
+        return float(np.asarray(self.quantum_mix_layers[layer_idx][unit_idx], dtype=float))
+
     def _interp_value(self, y_grid: Any, z: Any) -> Any:
         z = pnp.clip(z, self.activation_grid[0], self.activation_grid[-1])
         dx = self.activation_grid[1] - self.activation_grid[0]
@@ -323,9 +420,14 @@ class QuantumActivationClassifier:
         features = []
         for unit_idx in range(self.hidden_layer_sizes[layer_idx]):
             z = pnp.dot(self.hidden_weights[layer_idx][unit_idx], x_vec) + self.hidden_biases[layer_idx][unit_idx]
-            if self.hidden_preactivation == "tanh":
-                z = pnp.tanh(z)
-            features.append(self._interp_value(self._profile_expr(layer_idx, unit_idx), z))
+            quantum = self._interp_value(self._profile_expr(layer_idx, unit_idx), self._quantum_branch_input(z))
+            if self.hidden_function_family == "kan_quantum_hybrid":
+                base = self._silu_expr(z)
+                out = self._base_scale_expr(layer_idx, unit_idx) * base
+                out = out + self._quantum_scale_expr(layer_idx, unit_idx) * quantum
+                features.append(out)
+            else:
+                features.append(quantum)
         return pnp.array(features)
 
     def hidden_features(self, x: Any) -> Any:
@@ -344,8 +446,8 @@ class QuantumActivationClassifier:
         xb = pnp.array(x_batch, dtype=float)
         return pnp.array([self.forward_logits(x_i) for x_i in xb])
 
-    def _activation_profile_np(self, layer_idx: int, unit_idx: int) -> np.ndarray:
-        """Same profile as ``_profile_expr``, purely NumPy (for fast batched inference)."""
+    def _quantum_profile_np(self, layer_idx: int, unit_idx: int) -> np.ndarray:
+        """Same quantum profile as ``_profile_expr``, purely NumPy."""
         self._validate_layer_unit_idx(layer_idx, unit_idx)
         g = float(self.num_grid_points)
         if self.mode == "standard":
@@ -366,6 +468,25 @@ class QuantumActivationClassifier:
         z = _softmax2_np(lg)
         return g * (z[0] * pp - z[1] * pm)
 
+    def _activation_components_np(self, layer_idx: int, unit_idx: int) -> ActivationComponents:
+        self._validate_layer_unit_idx(layer_idx, unit_idx)
+        x_grid = np.asarray(self.activation_grid, dtype=float)
+        quantum_profile = self._quantum_profile_np(layer_idx, unit_idx)
+        quantum_scale = self._quantum_scale_np(layer_idx, unit_idx)
+        quantum_inputs = self._quantum_branch_input_np(x_grid)
+        quantum_curve = quantum_scale * _interp_values_np(quantum_inputs, x_grid, quantum_profile)
+        base_scale = self._base_scale_np(layer_idx, unit_idx)
+        base_curve = base_scale * _silu_np(x_grid)
+        combined = base_curve + quantum_curve
+        return ActivationComponents(
+            base=base_curve,
+            quantum=quantum_curve,
+            combined=combined,
+            quantum_profile=quantum_profile,
+            base_scale=base_scale,
+            quantum_scale=quantum_scale,
+        )
+
     def _forward_batch_numpy(self, x: np.ndarray) -> np.ndarray:
         """Vectorized forward pass for metrics / prediction (no per-sample PennyLane)."""
         hidden = np.asarray(x, dtype=np.float64)
@@ -379,14 +500,18 @@ class QuantumActivationClassifier:
             w = np.asarray(self.hidden_weights[layer_idx], dtype=np.float64)
             b = np.asarray(self.hidden_biases[layer_idx], dtype=np.float64)
             z_pre = hidden @ w.T + b
-            if self.hidden_preactivation == "tanh":
-                z_pre = np.tanh(z_pre)
+            z_quantum = self._quantum_branch_input_np(z_pre)
             width = self.hidden_layer_sizes[layer_idx]
-            out = np.empty((n, width), dtype=np.float64)
+            quantum_out = np.empty((n, width), dtype=np.float64)
             for h in range(width):
-                prof = self._activation_profile_np(layer_idx, h)
-                out[:, h] = _interp_values_np(z_pre[:, h], x_grid, prof)
-            hidden = out
+                prof = self._quantum_profile_np(layer_idx, h)
+                quantum_out[:, h] = _interp_values_np(z_quantum[:, h], x_grid, prof)
+            if self.hidden_function_family == "kan_quantum_hybrid":
+                base_scales = np.asarray(self.base_mix_layers[layer_idx], dtype=np.float64).reshape(1, -1)
+                quantum_scales = np.asarray(self.quantum_mix_layers[layer_idx], dtype=np.float64).reshape(1, -1)
+                hidden = base_scales * _silu_np(z_pre) + quantum_scales * quantum_out
+            else:
+                hidden = quantum_out
         return hidden @ w_out.T + b_out
 
     def predict_proba(self, x_batch: Any) -> np.ndarray:
@@ -402,9 +527,26 @@ class QuantumActivationClassifier:
         y = np.asarray(y_true, dtype=int)
         return float(np.mean(self.predict(x_batch) == y))
 
+    def get_activation_components(self, layer_idx: int, unit_idx: int | None = None) -> ActivationComponents:
+        layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
+        return self._activation_components_np(layer_idx, unit_idx)
+
     def get_activation_profile(self, layer_idx: int, unit_idx: int | None = None) -> np.ndarray:
         layer_idx, unit_idx = self._parse_layer_unit_args(layer_idx, unit_idx)
-        return _to_numpy_float(self._profile_expr(layer_idx, unit_idx))
+        return self.get_activation_components(layer_idx, unit_idx).combined
+
+    def profile_smoothness_penalty(self) -> Any:
+        if self.hidden_function_family != "kan_quantum_hybrid" or self.profile_smoothness_reg <= 0.0:
+            return pnp.array(0.0)
+        penalties = []
+        for layer_idx in range(self.num_hidden_layers):
+            for unit_idx in range(self.hidden_layer_sizes[layer_idx]):
+                effective_profile = self._quantum_scale_expr(layer_idx, unit_idx) * self._profile_expr(layer_idx, unit_idx)
+                diffs = effective_profile[1:] - effective_profile[:-1]
+                penalties.append(pnp.mean(diffs**2))
+        if not penalties:
+            return pnp.array(0.0)
+        return pnp.mean(pnp.stack(penalties))
 
     def measure_activation_profile(
         self,
@@ -514,7 +656,8 @@ def train_quantum_activation_classifier(
         model.set_parameters(*current_params)
         logits = model.forward_batch(x_p)
         probs = softmax(logits)
-        return -pnp.mean(pnp.sum(y_onehot * pnp.log(probs + EPS), axis=1))
+        data_loss = -pnp.mean(pnp.sum(y_onehot * pnp.log(probs + EPS), axis=1))
+        return data_loss + config.profile_smoothness_reg * model.profile_smoothness_penalty()
 
     if after_step is not None:
         model.set_parameters(*params)

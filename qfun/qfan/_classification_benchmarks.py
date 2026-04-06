@@ -18,6 +18,7 @@ from sklearn.neural_network import MLPClassifier
 
 from ..datasets import PreparedClassificationSplit
 from .quantum_activation_classifier import (
+    ActivationComponents,
     ActivationMeasurement,
     QuantumActivationClassifier,
     QuantumActivationConfig,
@@ -76,6 +77,7 @@ class QuantumExperimentResult:
     classification_report: str
     tracked_units: tuple[LayerUnit, ...]
     representative_units: tuple[LayerUnit, ...]
+    representative_components: tuple[ActivationComponents, ...]
     measurements: tuple[ActivationMeasurement, ...]
     eval_shots: int
     snapshot_interval: int
@@ -177,6 +179,9 @@ def run_quantum_experiment(
     batch_size: int = 512,
     show_training_progress: bool = False,
     hidden_preactivation: str = "superposition",
+    hidden_function_family: str = "pure_superposition",
+    hidden_base_activation: str = "silu",
+    profile_smoothness_reg: float = 0.0,
 ) -> QuantumExperimentResult:
     """Train one quantum-activation classifier and collect notebook-facing diagnostics."""
     cfg = QuantumActivationConfig(
@@ -193,6 +198,9 @@ def run_quantum_experiment(
         batch_size=batch_size,
         show_training_progress=show_training_progress,
         hidden_preactivation=hidden_preactivation,
+        hidden_function_family=hidden_function_family,
+        hidden_base_activation=hidden_base_activation,
+        profile_smoothness_reg=profile_smoothness_reg,
     )
     tracked_units = tuple(
         (layer_idx, unit_idx)
@@ -237,6 +245,10 @@ def run_quantum_experiment(
     )
     y_pred = np.asarray(model.predict(split.x_test), dtype=int)
     chosen_units = tuple(representative_units(model, k=2))
+    representative_components = tuple(
+        model.get_activation_components(layer_idx, unit_idx)
+        for layer_idx, unit_idx in chosen_units
+    )
     measurements = tuple(
         model.measure_activation_profile(layer_idx, unit_idx, shots=eval_shots)
         for layer_idx, unit_idx in chosen_units
@@ -263,6 +275,7 @@ def run_quantum_experiment(
         ),
         tracked_units=tracked_units,
         representative_units=chosen_units,
+        representative_components=representative_components,
         measurements=measurements,
         eval_shots=eval_shots,
         snapshot_interval=snapshot_interval,
@@ -308,9 +321,17 @@ def display_quantum_result(
         result.model,
         result.representative_units,
         result.measurements,
+        components=result.representative_components,
         shots=result.eval_shots,
         title_prefix=f"{result.label} measured activations",
     )
+    if result.config.hidden_function_family == "kan_quantum_hybrid" and result.representative_components:
+        plot_activation_components(
+            result.model,
+            result.representative_units,
+            result.representative_components,
+            title_prefix=f"{result.label} activation components",
+        )
 
 
 def plot_confusion_result(
@@ -485,6 +506,7 @@ def plot_measurement_overlays(
     unit_indices: tuple[LayerUnit, ...] | list[LayerUnit],
     measurements: tuple[ActivationMeasurement, ...] | list[ActivationMeasurement],
     *,
+    components: tuple[ActivationComponents, ...] | list[ActivationComponents] | None = None,
     shots: int,
     title_prefix: str,
 ) -> None:
@@ -493,23 +515,59 @@ def plot_measurement_overlays(
     fig, axes = plt.subplots(len(unit_indices), 1, figsize=(7, 3 * len(unit_indices)), sharex=True)
     axes = np.atleast_1d(axes)
     x_grid = np.asarray(model.activation_grid, dtype=float)
-    for ax, unit_ref, measurement in zip(axes, unit_indices, measurements):
+    component_list = list(components) if components is not None else [None] * len(unit_indices)
+    for ax, unit_ref, measurement, component in zip(axes, unit_indices, measurements, component_list):
         layer_idx, unit_idx = unit_ref
-        exact = model.get_activation_profile(layer_idx, unit_idx)
-        ax.plot(x_grid, exact, "k--", linewidth=2, label="exact activation")
-        ax.plot(x_grid, measurement.profile, linewidth=1.6, label=f"measured ({shots} shots)")
+        if component is not None:
+            exact = component.quantum_scale * component.quantum_profile
+            exact_label = "exact quantum branch"
+            measured = component.quantum_scale * measurement.profile
+            measured_label = f"measured quantum ({shots} shots)"
+        else:
+            exact = model.get_activation_profile(layer_idx, unit_idx)
+            exact_label = "exact activation"
+            measured = measurement.profile
+            measured_label = f"measured ({shots} shots)"
+        ax.plot(x_grid, exact, "k--", linewidth=2, label=exact_label)
+        ax.plot(x_grid, measured, linewidth=1.6, label=measured_label)
         ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
         ax.set_title(f"{title_prefix}: layer {layer_idx} unit {unit_idx}")
         ax.set_ylabel("activation")
         ax.legend(loc="best")
         print(
             f"layer {layer_idx} unit {unit_idx}: exact-vs-measured L1 = "
-            f"{np.sum(np.abs(exact - measurement.profile)):.6f}"
+            f"{np.sum(np.abs(exact - measured)):.6f}"
         )
         if measurement.p_pos is not None and measurement.p_neg is not None:
             print(f"  measured p_pos + p_neg = {measurement.p_pos.sum() + measurement.p_neg.sum():.6f}")
         if measurement.z_plus is not None and measurement.z_minus is not None:
             print(f"  measured z_plus + z_minus = {measurement.z_plus + measurement.z_minus:.6f}")
+    axes[-1].set_xlabel("pre-activation z")
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_activation_components(
+    model: QuantumActivationClassifier,
+    unit_indices: tuple[LayerUnit, ...] | list[LayerUnit],
+    components: tuple[ActivationComponents, ...] | list[ActivationComponents],
+    *,
+    title_prefix: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(len(unit_indices), 1, figsize=(7, 3 * len(unit_indices)), sharex=True)
+    axes = np.atleast_1d(axes)
+    x_grid = np.asarray(model.activation_grid, dtype=float)
+    for ax, unit_ref, component in zip(axes, unit_indices, components):
+        layer_idx, unit_idx = unit_ref
+        ax.plot(x_grid, component.base, linewidth=1.5, label="base path")
+        ax.plot(x_grid, component.quantum, linewidth=1.5, label="quantum path")
+        ax.plot(x_grid, component.combined, "k--", linewidth=2.0, label="combined")
+        ax.axhline(0.0, color="gray", alpha=0.3, linewidth=0.8)
+        ax.set_title(f"{title_prefix}: layer {layer_idx} unit {unit_idx}")
+        ax.set_ylabel("activation")
+        ax.legend(loc="best")
     axes[-1].set_xlabel("pre-activation z")
     plt.tight_layout()
     plt.show()
