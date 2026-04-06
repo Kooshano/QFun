@@ -14,6 +14,7 @@ build/
 htmlcov/
 
 # Generated outputs
+notebooks/note10_outputs/
 artifacts/
 artifacts/**/*.png
 output.png

@@ -164,6 +164,7 @@ def run_quantum_experiment(
     eval_shots: int,
     use_jax: bool = False,
     batch_size: int = 512,
+    show_training_progress: bool = False,
 ) -> QuantumExperimentResult:
     """Train one quantum-activation classifier and collect notebook-facing diagnostics."""
     cfg = QuantumActivationConfig(
@@ -177,6 +178,7 @@ def run_quantum_experiment(
         seed=seed,
         use_jax=use_jax,
         batch_size=batch_size,
+        show_training_progress=show_training_progress,
     )
     snapshot_unit_count = min(3, hidden_units)
     training_snapshots: list[TrainingSnapshot] = []

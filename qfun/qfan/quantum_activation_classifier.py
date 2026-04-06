@@ -26,6 +26,36 @@ def _softmax_np(logits: np.ndarray) -> np.ndarray:
     return exp_shifted / np.sum(exp_shifted, axis=1, keepdims=True)
 
 
+def _softmax2_np(raw: np.ndarray) -> np.ndarray:
+    """Two-class softmax (Mode B channel weights), NumPy only."""
+    raw = np.asarray(raw, dtype=float)
+    shifted = raw - np.max(raw)
+    exp_shifted = np.exp(shifted)
+    return exp_shifted / np.sum(exp_shifted)
+
+
+def _norm_amp_np(raw: np.ndarray, eps: float = EPS) -> np.ndarray:
+    raw = np.asarray(raw, dtype=float)
+    return raw / np.sqrt(np.sum(raw**2) + eps)
+
+
+def _interp_values_np(z: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray, eps: float = EPS) -> np.ndarray:
+    """Linear interpolation of ``y_grid`` on ``x_grid``, evaluated at each ``z`` (vectorized)."""
+    z = np.clip(np.asarray(z, dtype=float), x_grid[0], x_grid[-1])
+    dx = x_grid[1] - x_grid[0]
+    idx_float = (z - x_grid[0]) / dx
+    idx0 = np.floor(idx_float).astype(np.int64)
+    idx0 = np.clip(idx0, 0, len(x_grid) - 1)
+    idx1 = np.clip(idx0 + 1, 0, len(x_grid) - 1)
+    x0 = x_grid[idx0]
+    x1 = x_grid[idx1]
+    y0 = y_grid[idx0]
+    y1 = y_grid[idx1]
+    denom = np.where(np.abs(x1 - x0) < eps, 1.0, x1 - x0)
+    t = (z - x0) / denom
+    return (1.0 - t) * y0 + t * y1
+
+
 @dataclass(frozen=True)
 class QuantumActivationConfig:
     input_dim: int
@@ -40,6 +70,8 @@ class QuantumActivationConfig:
     #: Uses minibatches of ``batch_size``; good for large datasets and optional GPU.
     use_jax: bool = False
     batch_size: int = 512
+    #: If ``True``, show a tqdm progress bar during training when ``tqdm`` is installed.
+    show_training_progress: bool = False
 
 
 @dataclass(frozen=True)
@@ -205,8 +237,48 @@ class QuantumActivationClassifier:
         xb = pnp.array(x_batch, dtype=float)
         return pnp.array([self.forward_logits(x_i) for x_i in xb])
 
+    def _activation_profile_np(self, unit_idx: int) -> np.ndarray:
+        """Same profile as ``_profile_expr``, purely NumPy (for fast batched inference)."""
+        self._validate_unit_idx(unit_idx)
+        g = float(self.num_grid_points)
+        if self.mode == "standard":
+            raw = np.asarray(self.raw_profiles[unit_idx], dtype=float)
+            amps = _norm_amp_np(raw)
+            return g * (amps**2)
+        if self.mode == "mode_a":
+            raw = np.asarray(self.raw_profiles[unit_idx], dtype=float)
+            amps = _norm_amp_np(raw)
+            fp = amps**2
+            q = fp[0::2] - fp[1::2]
+            return g * q
+        rp = np.asarray(self.raw_plus[unit_idx], dtype=float)
+        rm = np.asarray(self.raw_minus[unit_idx], dtype=float)
+        lg = np.asarray(self.raw_channel_logits[unit_idx], dtype=float)
+        pp = _norm_amp_np(rp) ** 2
+        pm = _norm_amp_np(rm) ** 2
+        z = _softmax2_np(lg)
+        return g * (z[0] * pp - z[1] * pm)
+
+    def _forward_batch_numpy(self, x: np.ndarray) -> np.ndarray:
+        """Vectorized forward pass for metrics / prediction (no per-sample PennyLane)."""
+        xb = np.asarray(x, dtype=np.float64)
+        if xb.ndim == 1:
+            xb = xb.reshape(1, -1)
+        w_in = np.asarray(self.W_in, dtype=np.float64)
+        b_in = np.asarray(self.b_in, dtype=np.float64)
+        w_out = np.asarray(self.W_out, dtype=np.float64)
+        b_out = np.asarray(self.b_out, dtype=np.float64)
+        z = np.tanh(xb @ w_in.T + b_in)
+        x_grid = np.asarray(self.activation_grid, dtype=np.float64)
+        n = xb.shape[0]
+        hidden = np.empty((n, self.hidden_units), dtype=np.float64)
+        for h in range(self.hidden_units):
+            prof = self._activation_profile_np(h)
+            hidden[:, h] = _interp_values_np(z[:, h], x_grid, prof)
+        return hidden @ w_out.T + b_out
+
     def predict_proba(self, x_batch: Any) -> np.ndarray:
-        logits = _to_numpy_float(self.forward_batch(x_batch))
+        logits = self._forward_batch_numpy(np.asarray(x_batch, dtype=float))
         if logits.ndim == 1:
             logits = logits.reshape(1, -1)
         return _softmax_np(logits)
@@ -336,18 +408,34 @@ def train_quantum_activation_classifier(
             flush=True,
         )
 
-    for step in range(config.steps):
+    epoch_iter = range(config.steps)
+    epoch_pbar = None
+    if config.show_training_progress:
+        try:
+            from tqdm.auto import tqdm
+
+            epoch_pbar = tqdm(epoch_iter, desc="Training (PennyLane)", unit="epoch")
+            epoch_iter = epoch_pbar
+        except ImportError:
+            pass
+
+    for step in epoch_iter:
         params, loss_val = opt.step_and_cost(loss_fn, *params)
         loss_f = float(loss_val)
         losses.append(loss_f)
         model.set_parameters(*params)
         if after_step is not None:
             after_step(step, loss_f, model)
+        if epoch_pbar is not None:
+            epoch_pbar.set_postfix(loss=f"{loss_f:.4f}", refresh=True)
         if log_n and ((step + 1) % log_n == 0 or step == config.steps - 1):
             print(
                 f"  epoch {step + 1}/{config.steps}  train_loss={loss_f:.6f}",
                 flush=True,
             )
+
+    if epoch_pbar is not None:
+        epoch_pbar.close()
 
     return model, np.asarray(losses, dtype=float)
 

@@ -264,7 +264,26 @@ def train_quantum_activation_classifier_jax(
             flush=True,
         )
 
+    num_batches = (n + bs - 1) // bs
+    total_minibatch_updates = config.steps * num_batches
+    batch_pbar = None
+    if config.show_training_progress:
+        try:
+            from tqdm.auto import tqdm
+
+            batch_pbar = tqdm(
+                total=total_minibatch_updates,
+                desc="Training (JAX)",
+                unit="batch",
+            )
+        except ImportError:
+            print(
+                "Tip: pip install tqdm for a live minibatch progress bar.",
+                flush=True,
+            )
+
     rng = np.random.default_rng(config.seed)
+    first_minibatch = True
 
     for step in range(config.steps):
         perm = rng.permutation(n)
@@ -274,12 +293,20 @@ def train_quantum_activation_classifier_jax(
                 break
             xb = x[idx]
             yb = y_eye[idx]
+            if batch_pbar is not None and first_minibatch:
+                batch_pbar.write(
+                    "JAX: compiling train_step (first minibatch can take a while)…",
+                )
+                first_minibatch = False
             if idx.size == bs:
                 params, opt_state, _ = train_step(params, opt_state, xb, yb)
             else:
                 _, g = loss_grad(params, xb, yb)
                 updates, opt_state = optimizer.update(g, opt_state)
                 params = optax.apply_updates(params, updates)
+            if batch_pbar is not None:
+                batch_pbar.set_postfix(epoch=f"{step + 1}/{config.steps}", refresh=False)
+                batch_pbar.update(1)
 
         loss_f = full_data_loss(params)
         losses_out.append(loss_f)
@@ -288,9 +315,13 @@ def train_quantum_activation_classifier_jax(
         if after_step is not None:
             after_step(step, loss_f, model)
         if log_n and ((step + 1) % log_n == 0 or step == config.steps - 1):
-            print(
-                f"  epoch {step + 1}/{config.steps}  train_loss={loss_f:.6f}",
-                flush=True,
-            )
+            line = f"  epoch {step + 1}/{config.steps}  train_loss={loss_f:.6f}"
+            if batch_pbar is not None:
+                batch_pbar.write(line)
+            else:
+                print(line, flush=True)
+
+    if batch_pbar is not None:
+        batch_pbar.close()
 
     return model, np.asarray(losses_out, dtype=float)

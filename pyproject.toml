@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "jupyter", "ruff>=0.3"]
+dev = ["pytest>=7.0", "jupyter", "ruff>=0.3", "tqdm>=4.66"]
 # JAX + Optax for optional GPU/TPU training (``QuantumActivationConfig(use_jax=True)``).
 # JAX is capped below 0.6 for compatibility with PennyLane's JAX integration.
 # For NVIDIA GPUs, install a CUDA-enabled jaxlib per https://jax.readthedocs.io/en/latest/installation.html
