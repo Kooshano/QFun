@@ -136,7 +136,9 @@ def run_baseline(
         name=name,
         estimator=estimator,
         accuracy=float(accuracy_score(split.y_test, y_pred)),
-        macro_f1=float(f1_score(split.y_test, y_pred, average="macro")),
+        macro_f1=float(
+            f1_score(split.y_test, y_pred, average="macro", zero_division=0)
+        ),
         y_pred=y_pred,
         confusion_matrix=confusion_matrix(split.y_test, y_pred),
         classification_report=classification_report(
@@ -144,6 +146,7 @@ def run_baseline(
             y_pred,
             target_names=list(split.target_names),
             digits=3,
+            zero_division=0,
         ),
     )
 
@@ -299,7 +302,9 @@ def run_quantum_experiment(
         accuracy_history=tuple(accuracy_history),
         train_accuracy=float(model.accuracy(split.x_train, split.y_train)),
         test_accuracy=float(accuracy_score(split.y_test, y_pred)),
-        macro_f1=float(f1_score(split.y_test, y_pred, average="macro")),
+        macro_f1=float(
+            f1_score(split.y_test, y_pred, average="macro", zero_division=0)
+        ),
         y_pred=y_pred,
         confusion_matrix=confusion_matrix(split.y_test, y_pred),
         classification_report=classification_report(
@@ -307,6 +312,7 @@ def run_quantum_experiment(
             y_pred,
             target_names=list(split.target_names),
             digits=3,
+            zero_division=0,
         ),
         tracked_units=tracked_units,
         representative_units=chosen_units,

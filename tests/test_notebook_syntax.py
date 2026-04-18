@@ -8,6 +8,7 @@ NOTEBOOKS = [
     "notebooks/04_superposition_learning.ipynb",
     "notebooks/05_activations_iris.ipynb",
     "notebooks/06_activation_ablation.ipynb",
+    "notebooks/07_cutting_edge_qfun.ipynb",
 ]
 
 

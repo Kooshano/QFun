@@ -119,7 +119,7 @@ def softmax_weights(raw):
 def make_standard_prob_qnode(n_qubits: int, shots: int | None = None):
     """Return a QNode that maps a raw amplitude vector to measurement probabilities."""
     wires = list(range(n_qubits))
-    dev = qml.device("default.qubit", wires=n_qubits, shots=shots)
+    dev = qml.device("default.qubit", wires=n_qubits)
 
     @qml.qnode(dev, interface="autograd")
     def qnode(raw_params):
@@ -127,14 +127,14 @@ def make_standard_prob_qnode(n_qubits: int, shots: int | None = None):
         qml.MottonenStatePreparation(amps, wires=wires)
         return qml.probs(wires=wires)
 
-    return qnode
+    return qml.set_shots(qnode, shots=shots)
 
 
 def make_mode_a_prob_qnode(n_qubits: int, shots: int | None = None):
     """Return a QNode for ancilla-based signed superposition learning."""
     total_wires = n_qubits + 1
     wires = list(range(total_wires))
-    dev = qml.device("default.qubit", wires=total_wires, shots=shots)
+    dev = qml.device("default.qubit", wires=total_wires)
 
     @qml.qnode(dev, interface="autograd")
     def qnode(raw_params):
@@ -142,19 +142,20 @@ def make_mode_a_prob_qnode(n_qubits: int, shots: int | None = None):
         qml.MottonenStatePreparation(amps, wires=wires)
         return qml.probs(wires=wires)
 
-    return qnode
+    return qml.set_shots(qnode, shots=shots)
 
 
 def _sample_state(amplitudes: np.ndarray, n_wires: int, shots: int) -> dict[str, int]:
     wires = list(range(n_wires))
-    dev = qml.device("default.qubit", wires=n_wires, shots=shots)
+    dev = qml.device("default.qubit", wires=n_wires)
 
     @qml.qnode(dev, interface="auto")
     def sampler():
         qml.MottonenStatePreparation(amplitudes, wires=wires)
         return qml.sample(wires=wires)
 
-    return _samples_to_counts(np.asarray(sampler()))
+    sampler_shot = qml.set_shots(sampler, shots=shots)
+    return _samples_to_counts(np.asarray(sampler_shot()))
 
 
 def measure_standard_superposition(

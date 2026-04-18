@@ -23,14 +23,14 @@ def build_circuit(amplitudes: np.ndarray, n_qubits: int) -> qml.QNode:
     For most use cases prefer :func:`run_shots`, which runs the same preparation with
     configurable shot counts. This helper is kept for advanced / custom workflows.
     """
-    dev = qml.device("default.qubit", wires=n_qubits, shots=1)
+    dev = qml.device("default.qubit", wires=n_qubits)
 
     @qml.qnode(dev, interface="auto")
     def circuit():
         qml.AmplitudeEmbedding(features=amplitudes, wires=range(n_qubits), normalize=False)
         return qml.sample(wires=range(n_qubits))
 
-    return circuit
+    return qml.set_shots(circuit, shots=1)
 
 
 def run_shots(
@@ -39,14 +39,14 @@ def run_shots(
     shots: int = 1000,
 ) -> dict[str, int]:
     """Run *shots* measurements and return a bitstring -> count mapping."""
-    dev = qml.device("default.qubit", wires=n_qubits, shots=shots)
+    dev = qml.device("default.qubit", wires=n_qubits)
 
     @qml.qnode(dev, interface="auto")
     def circuit():
         qml.AmplitudeEmbedding(features=amplitudes, wires=range(n_qubits), normalize=False)
         return qml.sample(wires=range(n_qubits))
 
-    samples = np.asarray(circuit())
+    samples = np.asarray(qml.set_shots(circuit, shots=shots)())
     return _samples_to_counts(samples)
 
 
@@ -96,14 +96,14 @@ def run_shots_signed(
     """
     total_wires = n_qubits + 1
     state = _build_signed_state(amplitudes, sign_mask)
-    dev = qml.device("default.qubit", wires=total_wires, shots=shots)
+    dev = qml.device("default.qubit", wires=total_wires)
 
     @qml.qnode(dev, interface="auto")
     def circuit():
         qml.AmplitudeEmbedding(features=state, wires=range(total_wires), normalize=False)
         return qml.sample(wires=range(total_wires))
 
-    samples = np.asarray(circuit())
+    samples = np.asarray(qml.set_shots(circuit, shots=shots)())
     return _samples_to_counts(samples)
 
 
