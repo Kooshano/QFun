@@ -78,20 +78,29 @@ def _load_mnist() -> ClassificationDataset:
     return _dataset_from_bunch("mnist", bunch)
 
 
+def _load_fashion_mnist() -> ClassificationDataset:
+    """Load Fashion-MNIST via sklearn/OpenML; sklearn caches after the first fetch."""
+    bunch = fetch_openml("Fashion-MNIST", version=1, as_frame=False)
+    return _dataset_from_bunch("fashion_mnist", bunch)
+
+
 _DATASET_LOADERS: dict[str, Callable[[], ClassificationDataset]] = {
     "iris": lambda: _dataset_from_bunch("iris", load_iris()),
     "wine": lambda: _dataset_from_bunch("wine", load_wine()),
     "breast_cancer": lambda: _dataset_from_bunch("breast_cancer", load_breast_cancer()),
     "digits": lambda: _dataset_from_bunch("digits", load_digits()),
     "mnist": _load_mnist,
+    "fashion_mnist": _load_fashion_mnist,
+    "fashion-mnist": _load_fashion_mnist,
 }
 
 
 def load_classification_dataset(name: str) -> ClassificationDataset:
     """Load one of the supported sklearn classification datasets.
 
-    The tabular datasets and Digits are bundled with sklearn. ``"mnist"`` is fetched
-    once from OpenML via sklearn and then cached locally by sklearn for reuse.
+    The tabular datasets and Digits are bundled with sklearn. ``"mnist"`` and
+    ``"fashion_mnist"`` are fetched once from OpenML via sklearn and then cached
+    locally by sklearn for reuse.
     """
     key = str(name).strip().lower()
     if key not in _DATASET_LOADERS:
