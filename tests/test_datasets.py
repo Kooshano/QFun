@@ -113,3 +113,31 @@ def test_mnist_loader_coerces_targets_and_uses_openml(monkeypatch):
     assert len(dataset.feature_names) == 784
     assert dataset.feature_names[0] == "pixel_0"
     assert dataset.target_names == tuple(str(idx) for idx in range(10))
+
+
+def test_fashion_mnist_loader_accepts_paper_aliases(monkeypatch):
+    class FakeBunch:
+        data = np.zeros((12, 784), dtype=float)
+        target = np.array([str(idx % 10) for idx in range(12)], dtype=object)
+        feature_names = [f"pixel_{idx}" for idx in range(784)]
+        target_names = ["class"]
+
+    calls = []
+
+    def fake_fetch_openml(name, *, version, as_frame):
+        calls.append((name, version, as_frame))
+        return FakeBunch()
+
+    monkeypatch.setattr(datasets_module, "fetch_openml", fake_fetch_openml)
+
+    dataset_a = load_classification_dataset("fashion_mnist")
+    dataset_b = load_classification_dataset("fashion-mnist")
+
+    assert calls == [
+        ("Fashion-MNIST", 1, False),
+        ("Fashion-MNIST", 1, False),
+    ]
+    assert dataset_a.name == "fashion_mnist"
+    assert dataset_b.name == "fashion_mnist"
+    assert dataset_a.X.shape == (12, 784)
+    assert np.array_equal(dataset_a.y[:10], np.arange(10))
